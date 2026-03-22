@@ -842,9 +842,9 @@
         <div class="filters">
             <div class="filters-title" id="filters-toggle">
                 <span><i class="fas fa-folder" style="margin-right: 0.25rem;"></i> Storage Path Filter</span>
-                <i class="fas fa-chevron-down"></i>
+                <i class="fas fa-chevron-up"></i>
             </div>
-            <div class="filters-content hidden" id="filters-content">
+            <div class="filters-content" id="filters-content">
                 <div class="storage-path-filter" id="storage-path-filter">
                     <span style="font-size: 0.8rem; color: var(--text-tertiary);">Loading...</span>
                 </div>
@@ -1010,10 +1010,27 @@
                     return;
                 }
                 container.innerHTML = '';
-                paths.forEach(path => {
+                // "All" option — checked by default, unchecking it enables individual path selection
+                const allLabel = document.createElement('label');
+                allLabel.style.fontWeight = '600';
+                allLabel.innerHTML = '<input type="checkbox" id="sp-all" checked> All (no filter)';
+                container.appendChild(allLabel);
+                const allCheckbox = allLabel.querySelector('#sp-all');
+
+                paths.forEach(p => {
                     const label = document.createElement('label');
-                    label.innerHTML = `<input type="checkbox" value="${path.replace(/"/g, '&quot;')}" class="sp-checkbox"> ${path}`;
+                    label.innerHTML = `<input type="checkbox" value="${p.replace(/"/g, '&quot;')}" class="sp-checkbox" disabled> ${p}`;
                     container.appendChild(label);
+                });
+
+                // When "All" is toggled, enable/disable individual checkboxes
+                allCheckbox.addEventListener('change', () => {
+                    const boxes = container.querySelectorAll('.sp-checkbox');
+                    if (allCheckbox.checked) {
+                        boxes.forEach(cb => { cb.checked = false; cb.disabled = true; });
+                    } else {
+                        boxes.forEach(cb => { cb.disabled = false; });
+                    }
                 });
             } catch (err) {
                 container.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-tertiary);">Could not load paths</span>';
@@ -1021,6 +1038,8 @@
         }
 
         function getSelectedStoragePaths() {
+            const allCheckbox = document.getElementById('sp-all');
+            if (allCheckbox && allCheckbox.checked) return []; // No filter
             return Array.from(document.querySelectorAll('.sp-checkbox:checked')).map(cb => cb.value);
         }
 

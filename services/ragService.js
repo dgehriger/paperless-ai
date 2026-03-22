@@ -40,6 +40,25 @@ class RagService {
   }
 
   /**
+   * Detect if a question is a follow-up that refers to the previous answer
+   * (e.g. "show as a table", "summarize that", "explain more")
+   */
+  _isFollowUpQuestion(question) {
+    const q = question.toLowerCase().trim();
+    // Short questions referring to prior context
+    if (q.length < 80) {
+      const followUpPatterns = [
+        /^(show|display|format|present|list|summarize|explain|elaborate|clarify|translate|rewrite|repeat|shorten|expand|convert)\b/,
+        /\b(as a table|in a table|als tabelle|tabellarisch|in tabellenform)\b/,
+        /\b(more detail|more info|tell me more|kannst du|könntest du)\b/,
+        /\b(the same|das gleiche|nochmal|noch einmal)\b/,
+      ];
+      return followUpPatterns.some(p => p.test(q));
+    }
+    return false;
+  }
+
+  /**
    * Check if the RAG service is available and ready
    * @returns {Promise<{status: string, index_ready: boolean, data_loaded: boolean}>}
    */
@@ -85,6 +104,9 @@ class RagService {
    */
   async askQuestion(question, chatHistory = [], storagePaths = []) {
     try {
+      // Detect follow-up questions that refer to the previous answer
+      const isFollowUp = chatHistory.length > 0 && this._isFollowUpQuestion(question);
+
       // 1. Get context from the RAG service
       const contextRequest = { 
         question,
@@ -97,35 +119,38 @@ class RagService {
       
       const { context, sources } = response.data;
       
-      // 2. Fetch full content for each source document using doc_id
+      // 2. Fetch full content for each source document, with per-doc and total size limits
+      const MAX_CHARS_PER_DOC = 50000;  // ~12.5K tokens per doc
+      const MAX_TOTAL_CONTEXT = 500000; // ~125K tokens total context
       let enhancedContext = context;
+      let totalChars = context.length;
       
-      if (sources && sources.length > 0) {
-        // Fetch full document content for each source
-        const fullDocContents = await Promise.all(
-          sources.map(async (source) => {
-            if (source.doc_id) {
-              try {
-                const fullContent = await paperlessService.getDocumentContent(source.doc_id);
-                // Build structured metadata header
-                const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
-                if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
-                if (source.date) metaParts.push(`Date: ${source.date}`);
-                if (source.tags) metaParts.push(`Tags: ${source.tags}`);
-                if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
-                const metaHeader = metaParts.join(' | ');
-                return `--- Document [${metaHeader}] ---\n${fullContent}`;
-              } catch (error) {
-                console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
-                return '';
-              }
+      if (sources && sources.length > 0 && !isFollowUp) {
+        const fullDocContents = [];
+        for (const source of sources) {
+          if (totalChars >= MAX_TOTAL_CONTEXT) break;
+          if (!source.doc_id) continue;
+          try {
+            let fullContent = await paperlessService.getDocumentContent(source.doc_id);
+            if (fullContent.length > MAX_CHARS_PER_DOC) {
+              fullContent = fullContent.substring(0, MAX_CHARS_PER_DOC) + '\n[... document truncated ...]';
             }
-            return '';
-          })
-        );
-        
-        // Combine original context with full document contents
-        enhancedContext = context + '\n\n' + fullDocContents.filter(content => content).join('\n\n');
+            const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
+            if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
+            if (source.date) metaParts.push(`Date: ${source.date}`);
+            if (source.tags) metaParts.push(`Tags: ${source.tags}`);
+            if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
+            const metaHeader = metaParts.join(' | ');
+            const docBlock = `--- Document [${metaHeader}] ---\n${fullContent}`;
+            fullDocContents.push(docBlock);
+            totalChars += docBlock.length;
+          } catch (error) {
+            console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
+          }
+        }
+        if (fullDocContents.length > 0) {
+          enhancedContext = context + '\n\n' + fullDocContents.join('\n\n');
+        }
       }
       
       // 3. Use AI service to generate an answer based on the enhanced context
