@@ -65,7 +65,7 @@
         }
 
         html {
-            font-size: 14px;
+            font-size: 15px;
         }
 
         body {
@@ -267,20 +267,22 @@
 
         .input-container {
             position: relative;
-            margin-top: auto;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-color);
         }
 
         .message-input {
             width: 100%;
-            padding: 0.75rem;
-            padding-right: 4rem;
+            padding: 0.625rem 0.75rem;
+            padding-right: 3.5rem;
             border: 1px solid var(--border-color);
             border-radius: 1.25rem;
             background-color: var(--bg-tertiary);
             color: var(--text-color);
             font-size: 0.9375rem;
             resize: none;
-            min-height: 48px;
+            min-height: 42px;
             max-height: 200px;
             transition: border-color 0.2s ease;
             outline: none;
@@ -293,8 +295,8 @@
 
         .input-controls {
             position: absolute;
-            right: 0.75rem;
-            bottom: 0.75rem;
+            right: 0.5rem;
+            bottom: 0.5rem;
             display: flex;
             gap: 0.5rem;
         }
@@ -324,8 +326,9 @@
             color: white;
             border: none;
             border-radius: 50%;
-            width: 36px;
-            height: 36px;
+            width: 32px;
+            height: 32px;
+            font-size: 0.8rem;
             display: flex;
             align-items: center;
             justify-content: center;
