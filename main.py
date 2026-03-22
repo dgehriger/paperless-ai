@@ -647,30 +647,29 @@ class DataManager:
             raise
     
     # Max characters per document for embedding input.
-    # text-embedding-3-small uses 8191 tokens (~32K chars). OpenRouter also
-    # has a total request payload limit (~1MB). We truncate per-document and
-    # keep batches small so total payload stays well under the limit.
-    MAX_EMBEDDING_CHARS = 25000
+    # text-embedding-3-small uses 8191 tokens. For dense numeric content
+    # (e.g. bank statements), a single char can use multiple tokens, so
+    # 8K chars may already exceed the token limit. OpenRouter does not
+    # truncate and instead returns empty data. We start conservative and
+    # retry with less text on failure.
+    MAX_EMBEDDING_CHARS = 10000
 
     def _add_documents_to_chroma(self, collection, documents):
         """Add documents to ChromaDB collection"""
-        # We process in batches to avoid memory issues
         batch_size = 20
         total_docs = len(documents)
         
         for i in range(0, total_docs, batch_size):
             batch = documents[i:i+batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}/{(total_docs-1)//batch_size + 1} ({len(batch)} documents)")
+            batch_num = i // batch_size + 1
+            total_batches = (total_docs - 1) // batch_size + 1
+            logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} documents)")
             
             ids = [str(doc["id"]) for doc in batch]
-            
-            # Prepare texts for embedding, truncating to avoid API limits
             texts = [
                 f"{doc['title']} {doc['correspondent']} {doc['content']}"[:self.MAX_EMBEDDING_CHARS]
                 for doc in batch
             ]
-            
-            # Prepare metadata
             metadatas = [
                 {
                     "title": doc["title"],
@@ -682,12 +681,26 @@ class DataManager:
                 for doc in batch
             ]
             
-            # Add or update documents in collection
-            collection.upsert(
-                ids=ids,
-                documents=texts,
-                metadatas=metadatas
-            )
+            try:
+                collection.upsert(ids=ids, documents=texts, metadatas=metadatas)
+            except ValueError:
+                # Batch failed — fall back to one-at-a-time with progressive truncation
+                logger.warning(f"Batch {batch_num} failed, falling back to individual upserts")
+                for j in range(len(ids)):
+                    text = texts[j]
+                    for attempt, limit in enumerate([self.MAX_EMBEDDING_CHARS, 5000, 2000]):
+                        try:
+                            collection.upsert(
+                                ids=[ids[j]],
+                                documents=[text[:limit]],
+                                metadatas=[metadatas[j]]
+                            )
+                            break
+                        except ValueError:
+                            if attempt < 2:
+                                logger.warning(f"Doc {ids[j]} failed at {limit} chars, retrying shorter")
+                            else:
+                                logger.error(f"Doc {ids[j]} failed even at {limit} chars, skipping")
         
         logger.info(f"Added/updated {total_docs} documents to ChromaDB collection")
 
