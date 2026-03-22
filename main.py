@@ -647,13 +647,15 @@ class DataManager:
             raise
     
     # Max characters per document for embedding input.
-    # OpenRouter silently returns empty data for inputs exceeding ~65K chars.
-    MAX_EMBEDDING_CHARS = 60000
+    # text-embedding-3-small uses 8191 tokens (~32K chars). OpenRouter also
+    # has a total request payload limit (~1MB). We truncate per-document and
+    # keep batches small so total payload stays well under the limit.
+    MAX_EMBEDDING_CHARS = 25000
 
     def _add_documents_to_chroma(self, collection, documents):
         """Add documents to ChromaDB collection"""
         # We process in batches to avoid memory issues
-        batch_size = 50
+        batch_size = 20
         total_docs = len(documents)
         
         for i in range(0, total_docs, batch_size):
