@@ -187,7 +187,6 @@ router.use(async (req, res, next) => {
       }
     }
   }
-  }
 
   // Setup check
   try {
