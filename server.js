@@ -453,6 +453,11 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
       res.status(500).send('Error loading RAG interface');
     }
   });
+
+  // RAG Settings page
+  app.get('/rag/settings', (req, res) => {
+    res.render('rag-settings', { title: 'RAG Settings' });
+  });
 }
 
 /**

@@ -163,6 +163,13 @@ router.get('/index/check', async (req, res) => {
 });
 
 /**
+ * Get the built-in default system prompt
+ */
+router.get('/default-prompt', (req, res) => {
+  res.json({ prompt: ragService.getDefaultPrompt() });
+});
+
+/**
  * Get RAG system prompt
  */
 router.get('/system-prompt', async (req, res) => {

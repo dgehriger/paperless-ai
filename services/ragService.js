@@ -29,6 +29,16 @@ class RagService {
     await fs.writeFile(SYSTEM_PROMPT_FILE, prompt, 'utf-8');
   }
 
+  getDefaultPrompt() {
+    return [
+      'You are a knowledgeable document assistant with access to a curated archive.',
+      'Answer questions precisely based on the provided documents.',
+      'Always attribute facts to the specific document they come from, using the metadata (title, correspondent, date, tags, storage path) to distinguish between documents.',
+      'When multiple documents are relevant, synthesize information across them.',
+      'If the answer is not contained in the provided documents, say so clearly.',
+    ].join('\n');
+  }
+
   /**
    * Check if the RAG service is available and ready
    * @returns {Promise<{status: string, index_ready: boolean, data_loaded: boolean}>}
@@ -131,7 +141,7 @@ class RagService {
       
       // Create a language-agnostic prompt that works in any language
       const savedPrompt = await this.getSystemPrompt();
-      const systemInstruction = savedPrompt || 'You are a helpful assistant that answers questions about documents.';
+      const systemInstruction = savedPrompt || this.getDefaultPrompt();
       const prompt = `
         ${systemInstruction}
 

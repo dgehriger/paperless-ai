@@ -824,6 +824,9 @@
                 <div class="status-dot offline" id="status-indicator"></div>
                 <span id="status-text">Connecting...</span>
             </div>
+            <a href="/rag/settings" title="RAG Settings" style="color: var(--text-secondary); font-size: 1.25rem; transition: color 0.2s;">
+                <i class="fas fa-cog"></i>
+            </a>
             <button class="theme-toggle" id="theme-toggle">
                 <i class="fas fa-moon"></i>
             </button>
@@ -831,68 +834,19 @@
     </header>
 
     <main>
+        <!-- Hidden filter inputs (kept for JS compatibility) -->
+        <input type="hidden" id="date-from">
+        <input type="hidden" id="date-to">
+        <input type="hidden" id="correspondent">
+
         <div class="filters">
             <div class="filters-title" id="filters-toggle">
-                <span>API Status</span>
+                <span><i class="fas fa-folder" style="margin-right: 0.25rem;"></i> Storage Path Filter</span>
                 <i class="fas fa-chevron-down"></i>
             </div>
-            <div class="filters-content" id="filters-content">
-                <div class="filter-row" style="display: none;">
-                    <div class="filter-group">
-                        <label class="filter-label" for="date-from">From Date</label>
-                        <input type="date" id="date-from" class="filter-input">
-                    </div>
-                    <div class="filter-group">
-                        <label class="filter-label" for="date-to">To Date</label>
-                        <input type="date" id="date-to" class="filter-input">
-                    </div>
-                    <div class="filter-group">
-                        <label class="filter-label" for="correspondent">Sender/Recipient</label>
-                        <input type="text" id="correspondent" class="filter-input" placeholder="Name of sender/recipient">
-                    </div>
-                </div>
-
-                <div class="filter-row">
-                    <div class="filter-group">
-                        <label class="filter-label">Storage Path Filter</label>
-                        <div class="storage-path-filter" id="storage-path-filter">
-                            <span style="font-size: 0.8rem; color: var(--text-tertiary);">Loading...</span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="api-status" id="api-status">
-                    <!-- Status badges will be loaded dynamically -->
-                </div>
-
-                <div class="action-buttons">
-                    <button class="btn btn-outline" id="check-updates-btn">
-                        <i class="fas fa-sync-alt"></i>
-                        Check for Updates
-                    </button>
-                    <button class="btn btn-primary" id="start-indexing-btn">
-                        <i class="fas fa-database"></i>
-                        Index New
-                    </button>
-                    <button class="btn btn-outline" id="force-reindex-btn" style="color: var(--warning-color); border-color: var(--warning-color);">
-                        <i class="fas fa-redo"></i>
-                        Force Re-index
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <div class="filters" style="margin-bottom: 0.5rem;">
-            <div class="filters-title" id="prompt-toggle">
-                <span><i class="fas fa-cog" style="margin-right: 0.25rem;"></i> System Prompt</span>
-                <i class="fas fa-chevron-down"></i>
-            </div>
-            <div class="filters-content hidden" id="prompt-content">
-                <textarea id="system-prompt-input" class="filter-input" rows="4" style="resize: vertical; font-family: inherit; font-size: 0.85rem;" placeholder="Custom system instruction for the RAG assistant (leave empty for default)"></textarea>
-                <div class="action-buttons">
-                    <button class="btn btn-primary" id="save-prompt-btn">
-                        <i class="fas fa-save"></i> Save
-                    </button>
+            <div class="filters-content hidden" id="filters-content">
+                <div class="storage-path-filter" id="storage-path-filter">
+                    <span style="font-size: 0.8rem; color: var(--text-tertiary);">Loading...</span>
                 </div>
             </div>
         </div>
@@ -939,16 +893,12 @@
         const themeToggle = document.getElementById('theme-toggle');
         const statusIndicator = document.getElementById('status-indicator');
         const statusText = document.getElementById('status-text');
-        const apiStatus = document.getElementById('api-status');
         const chatContainer = document.getElementById('chat-container');
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-button');
         const typingIndicator = document.getElementById('typing-indicator');
         const filtersToggle = document.getElementById('filters-toggle');
         const filtersContent = document.getElementById('filters-content');
-        const checkUpdatesBtn = document.getElementById('check-updates-btn');
-        const startIndexingBtn = document.getElementById('start-indexing-btn');
-        const forceReindexBtn = document.getElementById('force-reindex-btn');
         const errorMessage = document.getElementById('error-message');
         const dateFrom = document.getElementById('date-from');
         const dateTo = document.getElementById('date-to');
@@ -982,9 +932,6 @@
             updateAIToggle();
             autoResizeTextarea();
             messageInput.addEventListener('input', autoResizeTextarea);
-            
-            // Initialize status badges to "connecting" state
-            updateStatusBadgesLoading();
             
             // Perform initial status check
             checkStatus();
@@ -1020,149 +967,6 @@
                 }
             });
             
-            checkUpdatesBtn.addEventListener('click', async () => {
-                checkUpdatesBtn.disabled = true;
-                checkUpdatesBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
-                
-                try {
-                    const response = await fetch('/api/rag/index/check');
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        showSystemMessage(`Status: ${data.message}`);
-                        isConnected = true;
-                        updateStatusIndicator('online', 'Online');
-                    } else {
-                        showError('Error checking status');
-                        isConnected = false;
-                        updateStatusIndicator('offline', 'Offline');
-                        updateStatusBadgesOffline();
-                    }
-                } catch (error) {
-                    showError(`Connection error: ${error.message}`);
-                    isConnected = false;
-                    updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
-                } finally {
-                    checkUpdatesBtn.disabled = false;
-                    checkUpdatesBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Check for Updates';
-                }
-            });
-            
-            startIndexingBtn.addEventListener('click', async () => {
-                startIndexingBtn.disabled = true;
-                startIndexingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
-                
-                try {
-                    const response = await fetch('/api/rag/index', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            force: false,
-                            background: true
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        showSystemMessage(`Indexing started: ${data.status}`);
-                        updateStatusIndicator('indexing', 'Indexing in progress');
-                        
-                        // Update status badges to show indexing in progress
-                        addStatusBadge(false, 'Indexing', 'In Progress', 'warning');
-                        
-                        isConnected = true;
-                    } else {
-                        showError('Error starting indexing');
-                        isConnected = false;
-                        updateStatusIndicator('offline', 'Offline');
-                        updateStatusBadgesOffline();
-                    }
-                } catch (error) {
-                    showError(`Connection error: ${error.message}`);
-                    isConnected = false;
-                    updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
-                } finally {
-                    startIndexingBtn.disabled = false;
-                    startIndexingBtn.innerHTML = '<i class="fas fa-database"></i> Index New';
-                }
-            });
-
-            forceReindexBtn.addEventListener('click', async () => {
-                if (!confirm('Force re-index will rebuild the entire search index. This may take a while. Continue?')) return;
-                forceReindexBtn.disabled = true;
-                forceReindexBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Re-indexing...';
-                try {
-                    const response = await fetch('/api/rag/index', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ force: true, background: true })
-                    });
-                    if (response.ok) {
-                        const data = await response.json();
-                        showSystemMessage(`Force re-index started: ${data.status}`);
-                        updateStatusIndicator('indexing', 'Re-indexing in progress');
-                        addStatusBadge(false, 'Indexing', 'Full Rebuild', 'warning');
-                        isConnected = true;
-                    } else {
-                        showError('Error starting re-index');
-                    }
-                } catch (error) {
-                    showError(`Connection error: ${error.message}`);
-                } finally {
-                    forceReindexBtn.disabled = false;
-                    forceReindexBtn.innerHTML = '<i class="fas fa-redo"></i> Force Re-index';
-                }
-            });
-
-            // System Prompt toggle and save
-            const promptToggle = document.getElementById('prompt-toggle');
-            const promptContent = document.getElementById('prompt-content');
-            const systemPromptInput = document.getElementById('system-prompt-input');
-            const savePromptBtn = document.getElementById('save-prompt-btn');
-
-            promptToggle.addEventListener('click', () => {
-                promptContent.classList.toggle('hidden');
-                const icon = promptToggle.querySelector('i:last-child');
-                icon.className = promptContent.classList.contains('hidden') ? 'fas fa-chevron-down' : 'fas fa-chevron-up';
-            });
-
-            // Load current system prompt
-            (async () => {
-                try {
-                    const resp = await fetch('/api/rag/system-prompt');
-                    if (resp.ok) {
-                        const data = await resp.json();
-                        systemPromptInput.value = data.prompt || '';
-                    }
-                } catch (e) { /* ignore */ }
-            })();
-
-            savePromptBtn.addEventListener('click', async () => {
-                savePromptBtn.disabled = true;
-                savePromptBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
-                try {
-                    const resp = await fetch('/api/rag/system-prompt', {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ prompt: systemPromptInput.value })
-                    });
-                    if (resp.ok) {
-                        showSystemMessage('System prompt saved.');
-                    } else {
-                        showError('Error saving system prompt');
-                    }
-                } catch (e) {
-                    showError(`Error: ${e.message}`);
-                } finally {
-                    savePromptBtn.disabled = false;
-                    savePromptBtn.innerHTML = '<i class="fas fa-save"></i> Save';
-                }
-            });
-
             // Poll for status updates every 10 seconds
             setInterval(checkStatus, 10000);
             
@@ -1231,13 +1035,11 @@
                 } else {
                     isConnected = false;
                     updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
                 }
             } catch (error) {
                 console.error('Error checking status:', error);
                 isConnected = false;
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
             }
         }
 
@@ -1253,7 +1055,6 @@
             // Update status indicator
             if (!statusData.server_up) {
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
                 return;
             }
             
@@ -1266,99 +1067,11 @@
             } else {
                 updateStatusIndicator('indexing', 'Loading data');
             }
-            
-            // Update API status badges
-            updateStatusBadges(statusData);
         }
 
         function updateStatusIndicator(status, text) {
             statusIndicator.className = `status-dot ${status}`;
             statusText.textContent = text;
-        }
-
-        function updateStatusBadgesLoading() {
-            apiStatus.innerHTML = '';
-            addStatusBadge(false, 'Server', 'Connecting...', 'warning');
-            addStatusBadge(false, 'Data', 'Pending', 'warning');
-            addStatusBadge(false, 'Index', 'Pending', 'warning');
-        }
-
-        function updateStatusBadgesOffline() {
-            apiStatus.innerHTML = '';
-            addStatusBadge(false, 'Server', 'Offline', 'error');
-            addStatusBadge(false, 'Data', 'Unknown', 'error');
-            addStatusBadge(false, 'Index', 'Unknown', 'error');
-        }
-
-        function updateStatusBadges(statusData) {
-            apiStatus.innerHTML = '';
-            
-            // Server Status
-            addStatusBadge(
-                statusData.server_up,
-                'Server',
-                statusData.server_up ? 'Online' : 'Offline'
-            );
-            
-            // Data Status
-            if (statusData.data_loaded !== undefined) {
-                addStatusBadge(
-                    statusData.data_loaded,
-                    'Data',
-                    statusData.data_loaded ? 'Loaded' : 'Not loaded'
-                );
-            }
-            
-            // Index Status
-            if (statusData.index_ready !== undefined) {
-                addStatusBadge(
-                    statusData.index_ready,
-                    'Index',
-                    statusData.index_ready ? 'Ready' : 'Not ready'
-                );
-            }
-            
-            // Indexing Status
-            if (statusData.indexing_status && statusData.indexing_status.running) {
-                addStatusBadge(
-                    false,
-                    'Indexing',
-                    'In Progress',
-                    'warning'
-                );
-            }
-            
-            // Document Count
-            if (statusData.indexing_status && statusData.indexing_status.documents_count > 0) {
-                addStatusBadge(
-                    true,
-                    'Documents',
-                    statusData.indexing_status.documents_count.toString(),
-                    'success'
-                );
-            } else if (statusData.indexing_status) {
-                // If documents_count is 0 but we're connected, show as warning
-                addStatusBadge(
-                    false,
-                    'Documents',
-                    statusData.indexing_status.documents_count.toString(),
-                    'warning'
-                );
-            }
-        }
-        
-        function addStatusBadge(isSuccess, label, value, forceStatus = null) {
-            const status = forceStatus || (isSuccess ? 'success' : 'error');
-            const icon = status === 'success' ? 'check-circle' : 
-                        status === 'warning' ? 'exclamation-triangle' : 'times-circle';
-            
-            const badge = document.createElement('div');
-            badge.className = `status-badge ${status}`;
-            badge.innerHTML = `
-                <i class="fas fa-${icon}"></i>
-                <span>${label}: ${value}</span>
-            `;
-            apiStatus.appendChild(badge);
         }
 
         function sendMessage() {
@@ -1440,7 +1153,6 @@
                 // Update connection status if there was an error
                 isConnected = false;
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
                 
                 // Schedule an immediate status check
                 setTimeout(checkStatus, 1000);
