@@ -54,19 +54,19 @@ class RagService {
         'Given the following user question, identify distinct named entities ' +
         '(people, companies, organizations) that the user is asking about. ' +
         'Use the system context to resolve pronouns and implicit group references ' +
-        '(e.g. "we", "our family", "us") into concrete entity names. ' +
+        'into concrete entity names. ' +
         'Return ONLY a JSON array of the entity names. ' +
         'If the question is about a single topic or mentions fewer than 2 distinct entities, return [].\n\n' +
         'Examples:\n' +
-        'Q: "What health insurance does Daniel, Sylvaine, Mathia and Timo have?"\n' +
-        'A: ["Daniel", "Sylvaine", "Mathia", "Timo"]\n' +
-        'Q: "Compare the CSS and Helsana insurance policies"\n' +
-        'A: ["CSS", "Helsana"]\n' +
-        'Q: "When is the next dentist appointment?"\n' +
+        'Q: "Show me contracts for Alice and Bob"\n' +
+        'A: ["Alice", "Bob"]\n' +
+        'Q: "Compare offers from Acme Corp and Globex"\n' +
+        'A: ["Acme Corp", "Globex"]\n' +
+        'Q: "When was the last invoice?"\n' +
         'A: []\n' +
-        'System context: our family includes Daniel, Sylvaine, Mathia and Timo\n' +
-        'Q: "Where are we insured for health insurance?"\n' +
-        'A: ["Daniel", "Sylvaine", "Mathia", "Timo"]\n\n' +
+        'System context: our team includes Alice, Bob and Carol\n' +
+        'Q: "What documents do we have?"\n' +
+        'A: ["Alice", "Bob", "Carol"]\n\n' +
         contextBlock +
         `Q: "${question}"\nA:`;
 
