@@ -201,28 +201,43 @@ class RagService {
       const savedPrompt = await this.getSystemPrompt();
       const systemInstruction = savedPrompt || this.getDefaultPrompt();
 
-      // Detect follow-up questions that refer to the previous answer
-      const isFollowUp = chatHistory.length > 0 && this._isFollowUpQuestion(question);
+      // Detect follow-up questions that only need reformatting (e.g. "show as a table")
+      const isReformatOnly = chatHistory.length > 0 && this._isFollowUpQuestion(question);
 
       let enhancedContext = '';
       let sources = [];
 
-      if (isFollowUp) {
-        // For follow-ups (e.g. "show as a table"), skip RAGZ entirely.
-        // The LLM already has the previous answer via chatHistory.
-        console.log('[RAG] Follow-up detected, skipping document retrieval');
+      if (isReformatOnly) {
+        // Pure reformatting — skip RAG retrieval, the LLM has the answer in chatHistory
+        console.log('[RAG] Reformat-only follow-up detected, skipping document retrieval');
       } else {
         // 1. Get context from the RAG service
+        // When there's conversation history, enrich the query with context from the
+        // last exchange so the vector search finds relevant documents (e.g. user asks
+        // about "health insurances" first, then "give me the policy numbers" — the
+        // second query needs the insurance names from the previous answer).
+        let searchQuery = question;
+        if (chatHistory.length > 0) {
+          const lastAssistant = [...chatHistory].reverse().find(m => m.role === 'assistant');
+          const lastUser = [...chatHistory].reverse().find(m => m.role === 'user');
+          if (lastAssistant) {
+            // Take a compact excerpt of the last exchange to enrich the search
+            const prevContext = (lastUser ? lastUser.content : '').substring(0, 200)
+              + ' ' + lastAssistant.content.substring(0, 500);
+            searchQuery = question + '\n\nContext from previous conversation:\n' + prevContext;
+          }
+        }
+
         // Use LLM to detect multi-entity queries and decompose into sub-queries
         const entities = await this._decomposeQuery(question, systemInstruction);
         let contextData;
 
         if (entities.length >= 2) {
           // Broad query mentioning multiple people/entities — use multi-query retrieval
-          contextData = await this._multiQueryContext(question, storagePaths, entities);
+          contextData = await this._multiQueryContext(searchQuery, storagePaths, entities);
         } else {
           const contextRequest = { 
-            question,
+            question: searchQuery,
             max_sources: this.maxSources
           };
           if (storagePaths && storagePaths.length > 0) {
@@ -281,7 +296,7 @@ class RagService {
       
       // Create a language-agnostic prompt that works in any language
       let prompt;
-      if (isFollowUp) {
+      if (isReformatOnly) {
         // Follow-up: no document context, rely entirely on chat history
         prompt = `
         ${systemInstruction}

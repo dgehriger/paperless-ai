@@ -66,6 +66,7 @@
 
         html {
             font-size: 15px;
+            overflow-x: hidden;
         }
 
         body {
@@ -77,6 +78,7 @@
             height: 100vh;
             height: 100dvh;
             overflow: hidden;
+            overflow-x: hidden;
         }
 
         header {
@@ -545,10 +547,11 @@
 
             main {
                 padding: 0.5rem;
+                max-width: 100%;
             }
 
             .message {
-                max-width: 95%;
+                max-width: 100%;
             }
 
             .message.assistant {
@@ -562,6 +565,38 @@
             footer {
                 padding: 0.25rem;
                 font-size: 0.6875rem;
+            }
+
+            .doc-viewer {
+                width: 100vw;
+                height: 100vh;
+                border-radius: 0;
+                max-width: none;
+            }
+
+            .doc-viewer-header {
+                padding: 0.5rem 0.75rem;
+            }
+
+            .doc-viewer-title {
+                font-size: 0.8rem;
+            }
+
+            .doc-viewer-actions button span {
+                display: none;
+            }
+
+            .source-card {
+                flex-wrap: wrap;
+            }
+
+            .source-info-meta {
+                flex-direction: column;
+                gap: 0.125rem;
+            }
+
+            .markdown table {
+                font-size: 0.8rem;
             }
         }
 
@@ -695,7 +730,7 @@
         }
 
         .hidden {
-            display: none;
+            display: none !important;
         }
 
         /* Copy button */
