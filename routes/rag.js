@@ -163,6 +163,36 @@ router.get('/index/check', async (req, res) => {
 });
 
 /**
+ * Get RAG system prompt
+ */
+router.get('/system-prompt', async (req, res) => {
+  try {
+    const prompt = await ragService.getSystemPrompt();
+    res.json({ prompt });
+  } catch (error) {
+    console.error('Error getting system prompt:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * Update RAG system prompt
+ */
+router.put('/system-prompt', async (req, res) => {
+  try {
+    const { prompt } = req.body;
+    if (typeof prompt !== 'string') {
+      return res.status(400).json({ error: 'prompt must be a string' });
+    }
+    await ragService.setSystemPrompt(prompt);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error setting system prompt:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
  * Get available storage paths for filtering
  */
 router.get('/storage-paths', async (req, res) => {

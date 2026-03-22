@@ -1,16 +1,32 @@
 // services/ragService.js
 const axios = require('axios');
+const fs = require('fs').promises;
+const path = require('path');
 const config = require('../config/config');
 const AIServiceFactory = require('./aiServiceFactory');
 const paperlessService = require('./paperlessService');
+
+const SYSTEM_PROMPT_FILE = path.join(process.cwd(), 'data', 'rag-system-prompt.txt');
 
 class RagService {
   constructor() {
     this.baseUrl = process.env.RAG_SERVICE_URL || 'http://localhost:8000';
     this.maxSources = parseInt(process.env.RAG_MAX_SOURCES || '10', 10);
     this.ragChatModel = process.env.RAG_CHAT_MODEL || '';  // If empty, use default AI service
-    this.ragSystemPrompt = process.env.RAG_SYSTEM_PROMPT || '';
     this.paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || '';
+  }
+
+  async getSystemPrompt() {
+    try {
+      return (await fs.readFile(SYSTEM_PROMPT_FILE, 'utf-8')).trim();
+    } catch {
+      return '';
+    }
+  }
+
+  async setSystemPrompt(prompt) {
+    await fs.mkdir(path.dirname(SYSTEM_PROMPT_FILE), { recursive: true });
+    await fs.writeFile(SYSTEM_PROMPT_FILE, prompt, 'utf-8');
   }
 
   /**
@@ -114,7 +130,8 @@ class RagService {
       }
       
       // Create a language-agnostic prompt that works in any language
-      const systemInstruction = this.ragSystemPrompt || 'You are a helpful assistant that answers questions about documents.';
+      const savedPrompt = await this.getSystemPrompt();
+      const systemInstruction = savedPrompt || 'You are a helpful assistant that answers questions about documents.';
       const prompt = `
         ${systemInstruction}
 
