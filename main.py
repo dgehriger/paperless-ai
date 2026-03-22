@@ -16,8 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from tqdm import tqdm
-import torch
-from sentence_transformers import SentenceTransformer, CrossEncoder
 import chromadb
 from chromadb.utils import embedding_functions
 from rank_bm25 import BM25Okapi
@@ -58,12 +56,15 @@ DOCUMENTS_FILE = "./data/documents.json"
 CHROMADB_DIR = "./data/chromadb"
 BM25_FILE = "./data/bm25_index.pkl"
 STATE_FILE = "./data/system_state.json"
-EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 COLLECTION_NAME = "documents"
 BM25_WEIGHT = 0.3
 SEMANTIC_WEIGHT = 0.7
-MAX_RESULTS = 20
+MAX_RESULTS = int(os.getenv("RAG_MAX_RESULTS", "20"))
+
+# External embeddings API configuration
+RAG_EMBEDDINGS_API_URL = os.getenv("RAG_EMBEDDINGS_API_URL") or os.getenv("CUSTOM_BASE_URL", "https://openrouter.ai/api/v1")
+RAG_EMBEDDINGS_API_KEY = os.getenv("RAG_EMBEDDINGS_API_KEY") or os.getenv("CUSTOM_API_KEY", "")
+RAG_EMBEDDINGS_MODEL = os.getenv("RAG_EMBEDDINGS_MODEL", "text-embedding-3-small")
 
 # Download NLTK resources if not present
 nltk.download('punkt', quiet=True)
@@ -231,10 +232,8 @@ class DataManager:
         self.is_initialized = False
         self.chroma_initialized = False
         
-        # Modelle nur initialisieren, wenn sie benötigt werden
-        self.sentence_transformer = None
+        # External API-based embedding function (no local models needed)
         self.embedding_function = None
-        self.cross_encoder = None
         self.chroma_client = None
         
         # Add tracking for indexed documents
@@ -246,21 +245,17 @@ class DataManager:
             self.initialize_models()
     
     def initialize_models(self):
-        """Initialisiere NLP-Modelle und ChromaDB"""
+        """Initialize ChromaDB and external embedding function (no local models needed)"""
         try:
-            if self.sentence_transformer is None:
-                logger.info("Initializing sentence transformer model")
-                self.sentence_transformer = SentenceTransformer(EMBEDDING_MODEL_NAME)
-                
             if self.embedding_function is None:
-                logger.info("Initializing embedding function")
-                self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=EMBEDDING_MODEL_NAME
+                logger.info(f"Initializing external embedding function: model={RAG_EMBEDDINGS_MODEL}, api_url={RAG_EMBEDDINGS_API_URL}")
+                # Use OpenAI-compatible embedding function with custom base URL
+                api_base = RAG_EMBEDDINGS_API_URL.rstrip('/')
+                self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
+                    api_key=RAG_EMBEDDINGS_API_KEY,
+                    api_base=api_base,
+                    model_name=RAG_EMBEDDINGS_MODEL
                 )
-                
-            if self.cross_encoder is None:
-                logger.info("Initializing cross-encoder model")
-                self.cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
                 
             if self.chroma_client is None:
                 logger.info("Initializing ChromaDB client")
@@ -1172,59 +1167,27 @@ class SearchEngine:
         return combined_results[:top_k]
     
     def rerank_results(self, query, results, top_k=MAX_RESULTS):
-        """Rerank results using cross-encoder"""
-        # More defensive check
+        """Rerank results — uses hybrid score directly (no local cross-encoder needed)"""
         if not results or len(results) == 0:
             logger.warning("No results to rerank")
             return []
             
         try:
-            # Prepare pairs for cross-encoder
-            pairs = [(query, f"{result['title']} {result['content'][:500]}" if 'content' in result and result['content'] else result.get('title', '')) 
-                    for result in results]
+            # Without a local cross-encoder, use the hybrid search score directly
+            # The hybrid score already combines BM25 (keyword) and semantic (embedding) scores
+            for result in results:
+                result["cross_score"] = result.get("score", 0.5)
             
-            # Make sure we have valid pairs
-            if not pairs:
-                logger.warning("No valid pairs to rerank")
-                return results  # Return original results without reranking
-                
-            # Get cross-encoder scores
-            cross_scores = self.data_manager.cross_encoder.predict(pairs)
-            
-            # Make sure we got valid scores
-            if not isinstance(cross_scores, np.ndarray) or len(cross_scores) != len(results):
-                logger.error(f"Invalid cross-encoder scores: got {len(cross_scores) if hasattr(cross_scores, '__len__') else 'invalid'} scores for {len(results)} results")
-                for result in results:
-                    result["cross_score"] = 0.5  # Default score
-                return results  # Return original results with default scores
-                
-            # Add cross-encoder scores to results
-            for i, score in enumerate(cross_scores):
-                if i < len(results):  # Make sure we don't go out of bounds
-                    # Convert score to a positive value by taking the sigmoid 
-                    # This maps any score to a value between 0 and 1
-                    # For cross-encoders, higher should be better matches
-                    norm_score = 1.0 / (1.0 + np.exp(-score))
-                    results[i]["cross_score"] = float(norm_score)
-            
-            # Fill in any missing scores
-            for i in range(len(results)):
-                if "cross_score" not in results[i]:
-                    results[i]["cross_score"] = 0.5  # Default score
-            
-            # Sort by cross-encoder score
-            results.sort(key=lambda x: x["cross_score"], reverse=True)
-            
-            logger.info(f"Reranked {len(results)} results")
+            # Already sorted by hybrid score from hybrid_search()
+            logger.info(f"Scored {len(results)} results using hybrid search scores")
             return results[:top_k]
             
         except Exception as e:
-            logger.error(f"Error reranking results: {str(e)}")
+            logger.error(f"Error scoring results: {str(e)}")
             logger.error(traceback.format_exc())
             
-            # Add default cross scores and return the original results
             for result in results:
-                result["cross_score"] = 0.5  # Default score
+                result["cross_score"] = 0.5
             
             return results[:top_k]
     

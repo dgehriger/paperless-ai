@@ -7,6 +7,8 @@ const paperlessService = require('./paperlessService');
 class RagService {
   constructor() {
     this.baseUrl = process.env.RAG_SERVICE_URL || 'http://localhost:8000';
+    this.maxSources = parseInt(process.env.RAG_MAX_SOURCES || '10', 10);
+    this.ragChatModel = process.env.RAG_CHAT_MODEL || '';  // If empty, use default AI service
   }
 
   /**
@@ -53,12 +55,12 @@ class RagService {
    * @param {string} question - The question to ask
    * @returns {Promise<{answer: string, sources: Array}>} - AI response and source documents
    */
-  async askQuestion(question) {
+  async askQuestion(question, chatHistory = []) {
     try {
       // 1. Get context from the RAG service
       const response = await axios.post(`${this.baseUrl}/context`, { 
         question,
-        max_sources: 5
+        max_sources: this.maxSources
       });
       
       const { context, sources } = response.data;
@@ -90,12 +92,20 @@ class RagService {
       // 3. Use AI service to generate an answer based on the enhanced context
       const aiService = AIServiceFactory.getService();
       
+      // Build conversation history context if available
+      let historyContext = '';
+      if (chatHistory && chatHistory.length > 0) {
+        historyContext = '\n\nPrevious conversation:\n' + chatHistory.map(msg => 
+          `${msg.role === 'user' ? 'User' : 'Assistant'}: ${msg.content}`
+        ).join('\n') + '\n\n';
+      }
+      
       // Create a language-agnostic prompt that works in any language
       const prompt = `
         You are a helpful assistant that answers questions about documents.
 
         Answer the following question precisely, based on the provided documents:
-
+        ${historyContext}
         Question: ${question}
 
         Context from relevant documents:
@@ -107,11 +117,17 @@ class RagService {
         - Avoid assumptions or speculation beyond the given context
         - Answer in the same language as the question was asked
         - Do not mention document numbers or source references, answer as if it were a natural conversation
+        - Use markdown formatting for structure (headers, bullet points, bold, etc.) when appropriate
         `;
 
       let answer;
       try {
-        answer = await aiService.generateText(prompt);
+        // If a specific RAG chat model is configured, temporarily override the model
+        if (this.ragChatModel) {
+          answer = await aiService.generateText(prompt, { model: this.ragChatModel });
+        } else {
+          answer = await aiService.generateText(prompt);
+        }
       } catch (error) {
         console.error('Error generating answer with AI service:', error);
         answer = "An error occurred while generating an answer. Please try again later.";

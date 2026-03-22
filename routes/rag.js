@@ -2,6 +2,7 @@
 const express = require('express');
 const router = express.Router();
 const ragService = require('../services/ragService');
+const chatHistoryService = require('../services/chatHistoryService');
 
 /**
  * Search documents
@@ -32,16 +33,91 @@ router.post('/search', async (req, res) => {
  */
 router.post('/ask', async (req, res) => {
   try {
-    const { question } = req.body;
+    const { question, sessionId } = req.body;
     
     if (!question) {
       return res.status(400).json({ error: 'Question is required' });
     }
     
-    const result = await ragService.askQuestion(question);
-    res.json(result);
+    // Get or create a session for chat history
+    let session = null;
+    let activeSessionId = sessionId;
+    if (!activeSessionId) {
+      session = await chatHistoryService.createSession();
+      activeSessionId = session.id;
+    } else {
+      session = await chatHistoryService.getSession(activeSessionId);
+    }
+    
+    // Build chat history from session for context
+    let chatHistory = [];
+    if (session && session.messages) {
+      chatHistory = session.messages.slice(-10).map(m => ({
+        role: m.role,
+        content: m.role === 'user' ? m.content : m.content.substring(0, 500)
+      }));
+    }
+    
+    // Save user message to history
+    if (activeSessionId) {
+      await chatHistoryService.addMessage(activeSessionId, 'user', question);
+    }
+    
+    const result = await ragService.askQuestion(question, chatHistory);
+    
+    // Save assistant response to history
+    if (activeSessionId) {
+      await chatHistoryService.addMessage(activeSessionId, 'assistant', result.answer, result.sources);
+    }
+    
+    res.json({ ...result, sessionId: activeSessionId });
   } catch (error) {
     console.error('Error in /api/rag/ask:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * List chat history sessions
+ */
+router.get('/history', async (req, res) => {
+  try {
+    const sessions = await chatHistoryService.listSessions();
+    res.json(sessions);
+  } catch (error) {
+    console.error('Error in /api/rag/history:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * Get a specific chat session
+ */
+router.get('/history/:id', async (req, res) => {
+  try {
+    const session = await chatHistoryService.getSession(req.params.id);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    res.json(session);
+  } catch (error) {
+    console.error('Error in /api/rag/history/:id:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * Delete a chat session
+ */
+router.delete('/history/:id', async (req, res) => {
+  try {
+    const success = await chatHistoryService.deleteSession(req.params.id);
+    if (!success) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error in DELETE /api/rag/history/:id:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });

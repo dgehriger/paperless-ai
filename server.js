@@ -442,8 +442,10 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
   // RAG UI route
   app.get('/rag', async (req, res) => {
     try {
+      const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace(/\/api\/?$/, '');
       res.render('rag', { 
-        title: 'Dokumenten-Fragen'
+        title: 'Dokumenten-Fragen',
+        paperlessUrl: paperlessUrl
       });
     } catch (error) {
       console.error('Error rendering RAG UI:', error);

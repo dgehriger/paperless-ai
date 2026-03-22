@@ -366,7 +366,7 @@ class OpenAIService {
    * @param {string} prompt - The prompt to generate text from
    * @returns {Promise<string>} - The generated text
    */
-  async generateText(prompt) {
+  async generateText(prompt, options = {}) {
     try {
       this.initialize();
 
@@ -374,7 +374,7 @@ class OpenAIService {
         throw new Error('OpenAI client not initialized - missing API key');
       }
 
-      const model = process.env.OPENAI_MODEL || config.openai.model;
+      const model = options.model || process.env.OPENAI_MODEL || config.openai.model;
 
       const response = await this.client.chat.completions.create({
         model: model,
