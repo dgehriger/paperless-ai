@@ -178,6 +178,20 @@ module.exports = {
     return user;
   },
 
+  /**
+   * Pre-register a user before their first login.
+   * Creates a user record that will be matched by findOrCreateUser on first CF Access login.
+   */
+  preRegisterUser(email, { permissions = ['rag_chat', 'history'], isAdmin = false, isApproved = true } = {}) {
+    const normalizedEmail = email.toLowerCase().trim();
+    const id = crypto.randomUUID();
+    const name = normalizedEmail.split('@')[0];
+    insertUser.run(id, normalizedEmail, name, isApproved ? 1 : 0, isAdmin ? 1 : 0, JSON.stringify(permissions));
+    const user = findUserById.get(id);
+    user.permissions = JSON.parse(user.permissions || '[]');
+    return user;
+  },
+
   getUserById(id) {
     const user = findUserById.get(id);
     if (user) user.permissions = JSON.parse(user.permissions || '[]');

@@ -70,6 +70,38 @@ router.put('/users/:id/libraries', (req, res) => {
 });
 
 /**
+ * Pre-register a new user (before their first CF Access login)
+ */
+router.post('/users', (req, res) => {
+  const { email, permissions, libraryIds, isAdmin } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'email is required' });
+  }
+  const normalizedEmail = email.toLowerCase().trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+    return res.status(400).json({ error: 'Invalid email address' });
+  }
+  // Check for duplicates
+  const existing = userModel.getUserByEmail(normalizedEmail);
+  if (existing) {
+    return res.status(409).json({ error: 'A user with this email already exists' });
+  }
+
+  const user = userModel.preRegisterUser(normalizedEmail, {
+    permissions: Array.isArray(permissions) ? permissions.filter(p => userModel.ALL_PERMISSIONS.includes(p)) : ['rag_chat', 'history'],
+    isAdmin: !!isAdmin,
+    isApproved: true,   // pre-registered users are approved by default
+  });
+
+  // Assign libraries if provided
+  if (Array.isArray(libraryIds) && libraryIds.length > 0) {
+    userModel.setUserLibraries(user.id, libraryIds);
+  }
+
+  res.json(user);
+});
+
+/**
  * Delete a user
  */
 router.delete('/users/:id', (req, res) => {

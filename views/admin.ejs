@@ -58,6 +58,9 @@
 
         <!-- Users Tab -->
         <div id="tab-users" class="tab-content active">
+            <div class="mb-4">
+                <button id="add-user-btn" class="action-btn primary"><i class="fas fa-user-plus mr-1"></i> Pre-register User</button>
+            </div>
             <div id="users-table-container">
                 <table>
                     <thead>
@@ -138,7 +141,7 @@
             const userLibs = '<span class="text-sm text-gray-500">' +
                 (allLibraries.filter(l => u._libraryIds && u._libraryIds.includes(l.id)).map(l => l.name).join(', ') || '—') +
                 '</span>';
-            const lastLogin = u.last_login ? new Date(u.last_login).toLocaleDateString() : 'Never';
+            const lastLogin = u.last_login ? new Date(u.last_login).toLocaleDateString() : '<span class="badge badge-blue">Pre-registered</span>';
 
             return `<tr>
                 <td>
@@ -259,6 +262,75 @@
 
     // Library CRUD
     document.getElementById('add-library-btn').addEventListener('click', () => editLibrary(null));
+
+    // Pre-register user
+    document.getElementById('add-user-btn').addEventListener('click', () => preRegisterUser());
+
+    function preRegisterUser() {
+        showModal(`
+            <h3>Pre-register User</h3>
+            <p class="text-sm text-gray-500 mb-4">Create a user account before their first login. When they connect via Cloudflare Access, the pre-configured permissions will apply immediately.</p>
+            <div class="form-group">
+                <label>Email address</label>
+                <input id="prereg-email" type="email" placeholder="user@example.com">
+            </div>
+            <div class="form-group">
+                <label>Permissions</label>
+                <div class="flex flex-wrap gap-1" id="prereg-perm-chips">
+                    ${allPermissions.map(p => {
+                        const defaultOn = ['rag_chat', 'history'].includes(p);
+                        return `<span class="perm-chip ${defaultOn ? 'selected' : ''}" data-perm="${p}" onclick="this.classList.toggle('selected')">${p}</span>`;
+                    }).join('')}
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Libraries</label>
+                <div class="flex flex-wrap gap-1" id="prereg-lib-chips">
+                    ${allLibraries.map(l => {
+                        return `<span class="perm-chip" data-lib="${l.id}" onclick="this.classList.toggle('selected')">${escHtml(l.name)}</span>`;
+                    }).join('')}
+                </div>
+                ${allLibraries.length === 0 ? '<span class="text-sm text-gray-400">No libraries defined yet</span>' : ''}
+            </div>
+            <div class="form-group">
+                <label><input type="checkbox" id="prereg-admin"> Admin</label>
+            </div>
+            <div id="prereg-error" class="text-red-600 text-sm mb-2" style="display:none"></div>
+            <div class="flex gap-2 justify-end mt-4">
+                <button class="action-btn" onclick="closeModal()">Cancel</button>
+                <button class="action-btn primary" onclick="submitPreRegister()">Create User</button>
+            </div>
+        `);
+        document.getElementById('prereg-email').focus();
+    }
+
+    async function submitPreRegister() {
+        const email = document.getElementById('prereg-email').value.trim();
+        if (!email) {
+            const errEl = document.getElementById('prereg-error');
+            errEl.textContent = 'Email is required';
+            errEl.style.display = 'block';
+            return;
+        }
+        const perms = Array.from(document.querySelectorAll('#prereg-perm-chips .perm-chip.selected')).map(el => el.dataset.perm);
+        const libs = Array.from(document.querySelectorAll('#prereg-lib-chips .perm-chip.selected')).map(el => el.dataset.lib);
+        const isAdmin = document.getElementById('prereg-admin').checked;
+
+        const res = await fetch('/api/admin/users', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, permissions: perms, libraryIds: libs, isAdmin })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            const errEl = document.getElementById('prereg-error');
+            errEl.textContent = err.error || 'Failed to create user';
+            errEl.style.display = 'block';
+            return;
+        }
+        closeModal();
+        await loadData();
+    }
 
     function editLibrary(id) {
         const lib = id ? allLibraries.find(l => l.id === id) : { name: '', description: '', filters: {} };
