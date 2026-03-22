@@ -31,8 +31,8 @@
         .action-btn.primary:hover { background: #dbeafe; }
         .action-btn.success { color: #16a34a; border-color: #bbf7d0; }
         .action-btn.success:hover { background: #dcfce7; }
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 50; display: flex; align-items: center; justify-content: center; }
-        .modal { background: white; border-radius: 0.75rem; padding: 1.5rem; width: 100%; max-width: 32rem; max-height: 80vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); }
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 50; display: flex; align-items: center; justify-content: center; backdrop-filter: none; }
+        .modal { background: white; border-radius: 0.75rem; padding: 1.5rem; width: 100%; max-width: 32rem; max-height: 80vh; overflow-y: auto; box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.25); opacity: 1; visibility: visible; position: static; }
         .modal h3 { font-size: 1.125rem; font-weight: 700; margin-bottom: 1rem; }
         .form-group { margin-bottom: 1rem; }
         .form-group label { display: block; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.25rem; }
