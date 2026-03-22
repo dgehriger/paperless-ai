@@ -9,6 +9,8 @@ class RagService {
     this.baseUrl = process.env.RAG_SERVICE_URL || 'http://localhost:8000';
     this.maxSources = parseInt(process.env.RAG_MAX_SOURCES || '10', 10);
     this.ragChatModel = process.env.RAG_CHAT_MODEL || '';  // If empty, use default AI service
+    this.ragSystemPrompt = process.env.RAG_SYSTEM_PROMPT || '';
+    this.paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || '';
   }
 
   /**
@@ -55,13 +57,17 @@ class RagService {
    * @param {string} question - The question to ask
    * @returns {Promise<{answer: string, sources: Array}>} - AI response and source documents
    */
-  async askQuestion(question, chatHistory = []) {
+  async askQuestion(question, chatHistory = [], storagePaths = []) {
     try {
       // 1. Get context from the RAG service
-      const response = await axios.post(`${this.baseUrl}/context`, { 
+      const contextRequest = { 
         question,
         max_sources: this.maxSources
-      });
+      };
+      if (storagePaths && storagePaths.length > 0) {
+        contextRequest.storage_paths = storagePaths;
+      }
+      const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
       
       const { context, sources } = response.data;
       
@@ -75,7 +81,14 @@ class RagService {
             if (source.doc_id) {
               try {
                 const fullContent = await paperlessService.getDocumentContent(source.doc_id);
-                return `Full document content for ${source.title || 'Document ' + source.doc_id}:\n${fullContent}`;
+                // Build structured metadata header
+                const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
+                if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
+                if (source.date) metaParts.push(`Date: ${source.date}`);
+                if (source.tags) metaParts.push(`Tags: ${source.tags}`);
+                if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
+                const metaHeader = metaParts.join(' | ');
+                return `--- Document [${metaHeader}] ---\n${fullContent}`;
               } catch (error) {
                 console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
                 return '';
@@ -101,8 +114,9 @@ class RagService {
       }
       
       // Create a language-agnostic prompt that works in any language
+      const systemInstruction = this.ragSystemPrompt || 'You are a helpful assistant that answers questions about documents.';
       const prompt = `
-        You are a helpful assistant that answers questions about documents.
+        ${systemInstruction}
 
         Answer the following question precisely, based on the provided documents:
         ${historyContext}
@@ -112,6 +126,7 @@ class RagService {
         ${enhancedContext}
 
         Important instructions:
+        - Each document is delimited by --- Document [...] --- and includes metadata (Title, Correspondent, Date, Tags, Storage Path) — use this metadata to accurately identify and distinguish documents
         - Use ONLY information from the provided documents
         - If the answer is not contained in the documents, respond: "This information is not contained in the documents." (in the same language as the question)
         - Avoid assumptions or speculation beyond the given context
@@ -135,11 +150,26 @@ class RagService {
       
       return {
         answer,
-        sources
+        sources,
+        paperlessPublicUrl: this.paperlessPublicUrl
       };
     } catch (error) {
       console.error('Error in askQuestion:', error);
       throw new Error("An error occurred while processing your question. Please try again later.");
+    }
+  }
+
+  /**
+   * Get available storage paths from the RAG service
+   * @returns {Promise<Array>} - List of storage paths
+   */
+  async getStoragePaths() {
+    try {
+      const response = await axios.get(`${this.baseUrl}/storage-paths`);
+      return response.data;
+    } catch (error) {
+      console.error('Error getting storage paths:', error.message);
+      return [];
     }
   }
 

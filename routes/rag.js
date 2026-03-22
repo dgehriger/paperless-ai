@@ -33,7 +33,7 @@ router.post('/search', async (req, res) => {
  */
 router.post('/ask', async (req, res) => {
   try {
-    const { question, sessionId } = req.body;
+    const { question, sessionId, storagePaths } = req.body;
     
     if (!question) {
       return res.status(400).json({ error: 'Question is required' });
@@ -63,7 +63,7 @@ router.post('/ask', async (req, res) => {
       await chatHistoryService.addMessage(activeSessionId, 'user', question);
     }
     
-    const result = await ragService.askQuestion(question, chatHistory);
+    const result = await ragService.askQuestion(question, chatHistory, storagePaths || []);
     
     // Save assistant response to history
     if (activeSessionId) {
@@ -158,6 +158,19 @@ router.get('/index/check', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error in /api/rag/index/check:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * Get available storage paths for filtering
+ */
+router.get('/storage-paths', async (req, res) => {
+  try {
+    const paths = await ragService.getStoragePaths();
+    res.json(paths);
+  } catch (error) {
+    console.error('Error in /api/rag/storage-paths:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });

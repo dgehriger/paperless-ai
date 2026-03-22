@@ -93,6 +93,7 @@ class SearchRequest(BaseModel):
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     correspondent: Optional[str] = None
+    storage_paths: Optional[List[str]] = None
 
 class IndexingRequest(BaseModel):
     force: bool = False
@@ -101,6 +102,7 @@ class IndexingRequest(BaseModel):
 class AskQuestionRequest(BaseModel):
     question: str
     max_sources: int = 5
+    storage_paths: Optional[List[str]] = None
 
 # Response models
 class SearchResult(BaseModel):
@@ -111,6 +113,8 @@ class SearchResult(BaseModel):
     cross_score: float
     snippet: str
     doc_id: Optional[int] = None
+    tags: Optional[str] = ""
+    storage_path: Optional[str] = ""
 
 # Global state object
 class GlobalState:
@@ -410,6 +414,20 @@ class DataManager:
                     if tag_response.status_code == 200:
                         tags.append(tag_response.json().get("name", ""))
             
+            # Get storage path name
+            storage_path = ""
+            if doc.get("storage_path"):
+                try:
+                    sp_response = requests.get(
+                        f"{self.paperless_url}/api/storage_paths/{doc['storage_path']}/",
+                        headers=self._get_headers(),
+                        timeout=10
+                    )
+                    if sp_response.status_code == 200:
+                        storage_path = sp_response.json().get("name", "")
+                except Exception:
+                    pass
+            
             # Create processed document
             processed_doc = {
                 "id": doc.get("id"),
@@ -418,6 +436,7 @@ class DataManager:
                 "correspondent": correspondent,
                 "created": doc.get("created_date", doc.get("created", "")),
                 "tags": tags,
+                "storage_path": storage_path,
                 "last_updated": doc.get("modified", "")
             }
             
@@ -676,6 +695,7 @@ class DataManager:
                     "correspondent": doc["correspondent"],
                     "created": doc["created"],
                     "tags": ", ".join(doc["tags"]),
+                    "storage_path": doc.get("storage_path", ""),
                     "hash": doc["hash"]
                 }
                 for doc in batch
@@ -1037,7 +1057,9 @@ class SearchEngine:
                         "correspondent": doc["correspondent"],
                         "date": doc["created"],
                         "score": float(score),
-                        "content": doc["content"]
+                        "content": doc["content"],
+                        "tags": ", ".join(doc.get("tags", [])),
+                        "storage_path": doc.get("storage_path", "")
                     })
                 except IndexError as e:
                     logger.error(f"Document index out of range: {i} (max: {len(self.documents)-1})")
@@ -1086,7 +1108,9 @@ class SearchEngine:
                             "correspondent": doc["correspondent"],
                             "date": doc["created"],
                             "score": float(distance) if isinstance(distance, (int, float)) else 1.0,
-                            "content": doc["content"]
+                            "content": doc["content"],
+                            "tags": ", ".join(doc.get("tags", [])),
+                            "storage_path": doc.get("storage_path", "")
                         })
                 except Exception as e:
                     logger.error(f"Error processing document with ID {doc_id}: {str(e)}")
@@ -1275,7 +1299,7 @@ class SearchEngine:
                 return []
                 
             # Apply filters
-            if request.from_date or request.to_date or request.correspondent:
+            if request.from_date or request.to_date or request.correspondent or request.storage_paths:
                 filtered_results = []
                 for result in results:
                     include = True
@@ -1300,6 +1324,12 @@ class SearchEngine:
                     # Filter by correspondent
                     if request.correspondent and result["correspondent"]:
                         if request.correspondent.lower() not in result["correspondent"].lower():
+                            include = False
+                    
+                    # Filter by storage paths
+                    if request.storage_paths:
+                        doc_sp = result.get("storage_path", "")
+                        if not doc_sp or doc_sp not in request.storage_paths:
                             include = False
                     
                     if include:
@@ -1328,7 +1358,9 @@ class SearchEngine:
                         score=result["score"],
                         cross_score=result.get("cross_score", 0.5),
                         snippet=snippet,
-                        doc_id=result["id"]
+                        doc_id=result["id"],
+                        tags=result.get("tags", ""),
+                        storage_path=result.get("storage_path", "")
                     ))
                 except Exception as item_e:
                     logger.error(f"Error formatting search result: {str(item_e)}")
@@ -1711,7 +1743,10 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
             search_engine.initialize(force_update=False)
         
         # Search for relevant documents
-        search_results = search_engine.search(SearchRequest(query=request.question))
+        search_req = SearchRequest(query=request.question)
+        if request.storage_paths:
+            search_req.storage_paths = request.storage_paths
+        search_results = search_engine.search(search_req)
         
         # Check if we got any results
         if not search_results or len(search_results) == 0:
@@ -1741,7 +1776,9 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
                 "correspondent": result.correspondent,
                 "date": result.date,
                 "snippet": result.snippet,
-                "doc_id": result.doc_id
+                "doc_id": result.doc_id,
+                "tags": result.tags or "",
+                "storage_path": result.storage_path or ""
             })
         
         return {
@@ -1752,6 +1789,21 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
     except Exception as e:
         logger.error(f"Context error: {str(e)}")
         logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/storage-paths")
+async def get_storage_paths():
+    """Get list of unique storage paths from indexed documents"""
+    try:
+        paths = set()
+        if global_state.data_manager and global_state.data_manager.documents:
+            for doc in global_state.data_manager.documents:
+                sp = doc.get("storage_path", "")
+                if sp:
+                    paths.add(sp)
+        return sorted(paths)
+    except Exception as e:
+        logger.error(f"Error getting storage paths: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status", response_model=dict)

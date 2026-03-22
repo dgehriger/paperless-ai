@@ -613,6 +613,58 @@
             display: none;
         }
 
+        /* Copy button */
+        .message.assistant {
+            position: relative;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            opacity: 0;
+            transition: opacity 0.2s ease, color 0.2s ease;
+            z-index: 1;
+        }
+        .message.assistant:hover .copy-btn {
+            opacity: 1;
+        }
+        .copy-btn:hover {
+            color: var(--primary-color);
+        }
+        .copy-btn.copied {
+            color: var(--success-color);
+            opacity: 1;
+        }
+
+        /* Storage path filter */
+        .storage-path-filter {
+            max-height: 120px;
+            overflow-y: auto;
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+            padding: 0.25rem;
+            background: var(--bg-tertiary);
+        }
+        .storage-path-filter label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+            border-radius: 0.25rem;
+        }
+        .storage-path-filter label:hover {
+            background: var(--bg-secondary);
+        }
+
         #error-message {
             color: var(--error-color);
             font-size: 0.875rem;
@@ -797,6 +849,15 @@
                     <div class="filter-group">
                         <label class="filter-label" for="correspondent">Sender/Recipient</label>
                         <input type="text" id="correspondent" class="filter-input" placeholder="Name of sender/recipient">
+                    </div>
+                </div>
+
+                <div class="filter-row">
+                    <div class="filter-group">
+                        <label class="filter-label">Storage Path Filter</label>
+                        <div class="storage-path-filter" id="storage-path-filter">
+                            <span style="font-size: 0.8rem; color: var(--text-tertiary);">Loading...</span>
+                        </div>
                     </div>
                 </div>
 
@@ -1012,6 +1073,9 @@
 
             // Poll for status updates every 10 seconds
             setInterval(checkStatus, 10000);
+            
+            // Load storage paths
+            loadStoragePaths();
         });
 
         function updateTheme() {
@@ -1037,6 +1101,31 @@
         function autoResizeTextarea() {
             messageInput.style.height = 'auto';
             messageInput.style.height = (messageInput.scrollHeight) + 'px';
+        }
+
+        async function loadStoragePaths() {
+            const container = document.getElementById('storage-path-filter');
+            try {
+                const response = await fetch('/api/rag/storage-paths');
+                if (!response.ok) throw new Error('Failed to load');
+                const paths = await response.json();
+                if (paths.length === 0) {
+                    container.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-tertiary);">No storage paths available</span>';
+                    return;
+                }
+                container.innerHTML = '';
+                paths.forEach(path => {
+                    const label = document.createElement('label');
+                    label.innerHTML = `<input type="checkbox" value="${path.replace(/"/g, '&quot;')}" class="sp-checkbox"> ${path}`;
+                    container.appendChild(label);
+                });
+            } catch (err) {
+                container.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-tertiary);">Could not load paths</span>';
+            }
+        }
+
+        function getSelectedStoragePaths() {
+            return Array.from(document.querySelectorAll('.sp-checkbox:checked')).map(cb => cb.value);
         }
 
         // Function to check RAG service status
@@ -1210,6 +1299,7 @@
             
             // Prepare request
             const endpoint = '/api/rag/ask';
+            const selectedPaths = getSelectedStoragePaths();
             
             fetch(endpoint, {
                 method: 'POST',
@@ -1222,7 +1312,8 @@
                     useAI: useAI,
                     from_date: fromDate || undefined,
                     to_date: toDate || undefined,
-                    correspondent: correspondentValue || undefined
+                    correspondent: correspondentValue || undefined,
+                    storagePaths: selectedPaths.length > 0 ? selectedPaths : undefined
                 })
             })
             .then(response => {
@@ -1279,7 +1370,8 @@
             // Format message with marked.js for proper markdown rendering
             let formattedMessage = marked.parse(message);
             
-            let html = `<div class="markdown">${formattedMessage}</div>`;
+            let html = `<button class="copy-btn" title="Copy to clipboard"><i class="fas fa-copy"></i></button>`;
+            html += `<div class="markdown">${formattedMessage}</div>`;
             
             // Add model info if available
             if (modelUsed) {
@@ -1329,7 +1421,28 @@
             }
             
             messageElement.innerHTML = html;
+            // Store raw text for copy
+            messageElement.dataset.rawText = message;
             chatContainer.appendChild(messageElement);
+            
+            // Add copy button event listener
+            const copyBtn = messageElement.querySelector('.copy-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await navigator.clipboard.writeText(messageElement.dataset.rawText);
+                        copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                        copyBtn.classList.add('copied');
+                        setTimeout(() => {
+                            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                            copyBtn.classList.remove('copied');
+                        }, 2000);
+                    } catch (err) {
+                        console.error('Copy failed:', err);
+                    }
+                });
+            }
             
             // Add event listener for sources toggle
             const toggleBtn = messageElement.querySelector('.sources-toggle');
