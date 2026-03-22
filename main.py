@@ -646,10 +646,14 @@ class DataManager:
             
             raise
     
+    # Max characters per document for embedding input.
+    # OpenRouter silently returns empty data for inputs exceeding ~65K chars.
+    MAX_EMBEDDING_CHARS = 60000
+
     def _add_documents_to_chroma(self, collection, documents):
         """Add documents to ChromaDB collection"""
         # We process in batches to avoid memory issues
-        batch_size = 100
+        batch_size = 50
         total_docs = len(documents)
         
         for i in range(0, total_docs, batch_size):
@@ -658,9 +662,9 @@ class DataManager:
             
             ids = [str(doc["id"]) for doc in batch]
             
-            # Prepare texts for embedding
+            # Prepare texts for embedding, truncating to avoid API limits
             texts = [
-                f"{doc['title']} {doc['correspondent']} {doc['content']}"
+                f"{doc['title']} {doc['correspondent']} {doc['content']}"[:self.MAX_EMBEDDING_CHARS]
                 for doc in batch
             ]
             
