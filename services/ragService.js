@@ -44,12 +44,17 @@ class RagService {
    * each be searched separately. Language-agnostic — no hardcoded word lists.
    * Returns an array of entity names, or empty if the question is about one topic.
    */
-  async _decomposeQuery(question) {
+  async _decomposeQuery(question, systemPrompt = '') {
     try {
       const aiService = AIServiceFactory.getService();
+      const contextBlock = systemPrompt
+        ? `System context (use this to resolve implicit references like "we", "our", "us"):\n${systemPrompt}\n\n`
+        : '';
       const decompositionPrompt =
         'Given the following user question, identify distinct named entities ' +
         '(people, companies, organizations) that the user is asking about. ' +
+        'Use the system context to resolve pronouns and implicit group references ' +
+        '(e.g. "we", "our family", "us") into concrete entity names. ' +
         'Return ONLY a JSON array of the entity names. ' +
         'If the question is about a single topic or mentions fewer than 2 distinct entities, return [].\n\n' +
         'Examples:\n' +
@@ -58,7 +63,11 @@ class RagService {
         'Q: "Compare the CSS and Helsana insurance policies"\n' +
         'A: ["CSS", "Helsana"]\n' +
         'Q: "When is the next dentist appointment?"\n' +
-        'A: []\n\n' +
+        'A: []\n' +
+        'System context: our family includes Daniel, Sylvaine, Mathia and Timo\n' +
+        'Q: "Where are we insured for health insurance?"\n' +
+        'A: ["Daniel", "Sylvaine", "Mathia", "Timo"]\n\n' +
+        contextBlock +
         `Q: "${question}"\nA:`;
 
       const opts = this.ragChatModel ? { model: this.ragChatModel } : {};
@@ -188,6 +197,10 @@ class RagService {
    */
   async askQuestion(question, chatHistory = [], storagePaths = []) {
     try {
+      // Load system prompt once — used for both query decomposition and answer generation
+      const savedPrompt = await this.getSystemPrompt();
+      const systemInstruction = savedPrompt || this.getDefaultPrompt();
+
       // Detect follow-up questions that refer to the previous answer
       const isFollowUp = chatHistory.length > 0 && this._isFollowUpQuestion(question);
 
@@ -201,7 +214,7 @@ class RagService {
       } else {
         // 1. Get context from the RAG service
         // Use LLM to detect multi-entity queries and decompose into sub-queries
-        const entities = await this._decomposeQuery(question);
+        const entities = await this._decomposeQuery(question, systemInstruction);
         let contextData;
 
         if (entities.length >= 2) {
@@ -267,9 +280,6 @@ class RagService {
       }
       
       // Create a language-agnostic prompt that works in any language
-      const savedPrompt = await this.getSystemPrompt();
-      const systemInstruction = savedPrompt || this.getDefaultPrompt();
-      
       let prompt;
       if (isFollowUp) {
         // Follow-up: no document context, rely entirely on chat history
