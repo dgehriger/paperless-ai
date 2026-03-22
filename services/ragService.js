@@ -40,20 +40,42 @@ class RagService {
   }
 
   /**
-   * Extract named entities (proper-cased names) from a question.
-   * Used to decompose broad multi-entity queries into targeted sub-queries.
+   * Use the LLM to identify distinct named entities in a question that should
+   * each be searched separately. Language-agnostic — no hardcoded word lists.
+   * Returns an array of entity names, or empty if the question is about one topic.
    */
-  _extractNamedEntities(question) {
-    // Match capitalized words that look like person names (2+ chars, not sentence-start common words)
-    const stopWords = new Set([
-      'I', 'The', 'This', 'That', 'What', 'Where', 'When', 'Who', 'How', 'Which',
-      'Show', 'List', 'Find', 'Tell', 'Give', 'Please', 'Can', 'Could', 'Would',
-      'Are', 'Is', 'Was', 'Were', 'Do', 'Does', 'Did', 'Have', 'Has', 'Had',
-      'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
-      'September', 'October', 'November', 'December', 'LAMal', 'LCA',
-    ]);
-    const matches = question.match(/\b[A-Z][a-zà-ÿ]+\b/g) || [];
-    return [...new Set(matches.filter(w => !stopWords.has(w) && w.length >= 3))];
+  async _decomposeQuery(question) {
+    try {
+      const aiService = AIServiceFactory.getService();
+      const decompositionPrompt =
+        'Given the following user question, identify distinct named entities ' +
+        '(people, companies, organizations) that the user is asking about. ' +
+        'Return ONLY a JSON array of the entity names. ' +
+        'If the question is about a single topic or mentions fewer than 2 distinct entities, return [].\n\n' +
+        'Examples:\n' +
+        'Q: "What health insurance does Daniel, Sylvaine, Mathia and Timo have?"\n' +
+        'A: ["Daniel", "Sylvaine", "Mathia", "Timo"]\n' +
+        'Q: "Compare the CSS and Helsana insurance policies"\n' +
+        'A: ["CSS", "Helsana"]\n' +
+        'Q: "When is the next dentist appointment?"\n' +
+        'A: []\n\n' +
+        `Q: "${question}"\nA:`;
+
+      const opts = this.ragChatModel ? { model: this.ragChatModel } : {};
+      const raw = await aiService.generateText(decompositionPrompt, opts);
+
+      // Extract the JSON array from the response (tolerant of markdown fences)
+      const match = raw.match(/\[[\s\S]*?\]/);
+      if (!match) return [];
+      const entities = JSON.parse(match[0]);
+      if (!Array.isArray(entities)) return [];
+      const unique = [...new Set(entities.filter(e => typeof e === 'string' && e.length > 0))];
+      console.log(`[RAG] Query decomposition: ${unique.length} entities found: ${unique.join(', ')}`);
+      return unique;
+    } catch (err) {
+      console.warn('[RAG] Query decomposition failed, skipping multi-query:', err.message);
+      return [];
+    }
   }
 
   /**
@@ -178,8 +200,8 @@ class RagService {
         console.log('[RAG] Follow-up detected, skipping document retrieval');
       } else {
         // 1. Get context from the RAG service
-        // Detect multi-entity queries and use sub-queries for better recall
-        const entities = this._extractNamedEntities(question);
+        // Use LLM to detect multi-entity queries and decompose into sub-queries
+        const entities = await this._decomposeQuery(question);
         let contextData;
 
         if (entities.length >= 2) {
