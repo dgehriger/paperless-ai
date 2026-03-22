@@ -1010,16 +1010,17 @@
                     return;
                 }
                 container.innerHTML = '';
-                // "All" option — checked by default, unchecking it enables individual path selection
+                // "All" option — unchecked by default; checking it disables individual selection
                 const allLabel = document.createElement('label');
                 allLabel.style.fontWeight = '600';
-                allLabel.innerHTML = '<input type="checkbox" id="sp-all" checked> All (no filter)';
+                allLabel.innerHTML = '<input type="checkbox" id="sp-all"> All (no filter)';
                 container.appendChild(allLabel);
                 const allCheckbox = allLabel.querySelector('#sp-all');
 
                 paths.forEach(p => {
                     const label = document.createElement('label');
-                    label.innerHTML = `<input type="checkbox" value="${p.replace(/"/g, '&quot;')}" class="sp-checkbox" disabled> ${p}`;
+                    const isDefault = (p.toLowerCase() === 'default');
+                    label.innerHTML = `<input type="checkbox" value="${p.replace(/"/g, '&quot;')}" class="sp-checkbox"${isDefault ? ' checked' : ''}> ${p}`;
                     container.appendChild(label);
                 });
 

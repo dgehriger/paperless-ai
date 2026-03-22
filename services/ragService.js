@@ -107,49 +107,59 @@ class RagService {
       // Detect follow-up questions that refer to the previous answer
       const isFollowUp = chatHistory.length > 0 && this._isFollowUpQuestion(question);
 
-      // 1. Get context from the RAG service
-      const contextRequest = { 
-        question,
-        max_sources: this.maxSources
-      };
-      if (storagePaths && storagePaths.length > 0) {
-        contextRequest.storage_paths = storagePaths;
-      }
-      const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
-      
-      const { context, sources } = response.data;
-      
-      // 2. Fetch full content for each source document, with per-doc and total size limits
-      const MAX_CHARS_PER_DOC = 50000;  // ~12.5K tokens per doc
-      const MAX_TOTAL_CONTEXT = 500000; // ~125K tokens total context
-      let enhancedContext = context;
-      let totalChars = context.length;
-      
-      if (sources && sources.length > 0 && !isFollowUp) {
-        const fullDocContents = [];
-        for (const source of sources) {
-          if (totalChars >= MAX_TOTAL_CONTEXT) break;
-          if (!source.doc_id) continue;
-          try {
-            let fullContent = await paperlessService.getDocumentContent(source.doc_id);
-            if (fullContent.length > MAX_CHARS_PER_DOC) {
-              fullContent = fullContent.substring(0, MAX_CHARS_PER_DOC) + '\n[... document truncated ...]';
-            }
-            const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
-            if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
-            if (source.date) metaParts.push(`Date: ${source.date}`);
-            if (source.tags) metaParts.push(`Tags: ${source.tags}`);
-            if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
-            const metaHeader = metaParts.join(' | ');
-            const docBlock = `--- Document [${metaHeader}] ---\n${fullContent}`;
-            fullDocContents.push(docBlock);
-            totalChars += docBlock.length;
-          } catch (error) {
-            console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
-          }
+      let enhancedContext = '';
+      let sources = [];
+
+      if (isFollowUp) {
+        // For follow-ups (e.g. "show as a table"), skip RAGZ entirely.
+        // The LLM already has the previous answer via chatHistory.
+        console.log('[RAG] Follow-up detected, skipping document retrieval');
+      } else {
+        // 1. Get context from the RAG service
+        const contextRequest = { 
+          question,
+          max_sources: this.maxSources
+        };
+        if (storagePaths && storagePaths.length > 0) {
+          contextRequest.storage_paths = storagePaths;
         }
-        if (fullDocContents.length > 0) {
-          enhancedContext = context + '\n\n' + fullDocContents.join('\n\n');
+        const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
+        
+        const contextData = response.data;
+        enhancedContext = contextData.context;
+        sources = contextData.sources || [];
+        
+        // 2. Fetch full content for each source document, with per-doc and total size limits
+        const MAX_CHARS_PER_DOC = 50000;  // ~12.5K tokens per doc
+        const MAX_TOTAL_CONTEXT = 500000; // ~125K tokens total context
+        let totalChars = enhancedContext.length;
+        
+        if (sources.length > 0) {
+          const fullDocContents = [];
+          for (const source of sources) {
+            if (totalChars >= MAX_TOTAL_CONTEXT) break;
+            if (!source.doc_id) continue;
+            try {
+              let fullContent = await paperlessService.getDocumentContent(source.doc_id);
+              if (fullContent.length > MAX_CHARS_PER_DOC) {
+                fullContent = fullContent.substring(0, MAX_CHARS_PER_DOC) + '\n[... document truncated ...]';
+              }
+              const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
+              if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
+              if (source.date) metaParts.push(`Date: ${source.date}`);
+              if (source.tags) metaParts.push(`Tags: ${source.tags}`);
+              if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
+              const metaHeader = metaParts.join(' | ');
+              const docBlock = `--- Document [${metaHeader}] ---\n${fullContent}`;
+              fullDocContents.push(docBlock);
+              totalChars += docBlock.length;
+            } catch (error) {
+              console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
+            }
+          }
+          if (fullDocContents.length > 0) {
+            enhancedContext = enhancedContext + '\n\n' + fullDocContents.join('\n\n');
+          }
         }
       }
       
@@ -167,7 +177,24 @@ class RagService {
       // Create a language-agnostic prompt that works in any language
       const savedPrompt = await this.getSystemPrompt();
       const systemInstruction = savedPrompt || this.getDefaultPrompt();
-      const prompt = `
+      
+      let prompt;
+      if (isFollowUp) {
+        // Follow-up: no document context, rely entirely on chat history
+        prompt = `
+        ${systemInstruction}
+
+        The user is asking a follow-up question about your previous answer. Use the conversation history to respond.
+        ${historyContext}
+        Follow-up question: ${question}
+
+        Important instructions:
+        - Base your answer on the previous conversation — reformat, summarize, or elaborate as requested
+        - Answer in the same language as the question was asked
+        - Use markdown formatting for structure (headers, bullet points, bold, tables, etc.) when appropriate
+        `;
+      } else {
+        prompt = `
         ${systemInstruction}
 
         Answer the following question precisely, based on the provided documents:
@@ -186,6 +213,7 @@ class RagService {
         - Do not mention document numbers or source references, answer as if it were a natural conversation
         - Use markdown formatting for structure (headers, bullet points, bold, etc.) when appropriate
         `;
+      }
 
       let answer;
       try {
