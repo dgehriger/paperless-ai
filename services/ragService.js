@@ -40,6 +40,68 @@ class RagService {
   }
 
   /**
+   * Extract named entities (proper-cased names) from a question.
+   * Used to decompose broad multi-entity queries into targeted sub-queries.
+   */
+  _extractNamedEntities(question) {
+    // Match capitalized words that look like person names (2+ chars, not sentence-start common words)
+    const stopWords = new Set([
+      'I', 'The', 'This', 'That', 'What', 'Where', 'When', 'Who', 'How', 'Which',
+      'Show', 'List', 'Find', 'Tell', 'Give', 'Please', 'Can', 'Could', 'Would',
+      'Are', 'Is', 'Was', 'Were', 'Do', 'Does', 'Did', 'Have', 'Has', 'Had',
+      'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+      'September', 'October', 'November', 'December', 'LAMal', 'LCA',
+    ]);
+    const matches = question.match(/\b[A-Z][a-zà-ÿ]+\b/g) || [];
+    return [...new Set(matches.filter(w => !stopWords.has(w) && w.length >= 3))];
+  }
+
+  /**
+   * Issue multiple RAGZ queries (original + per-entity) and merge/deduplicate sources.
+   * This ensures broad multi-entity questions retrieve documents for ALL mentioned people.
+   */
+  async _multiQueryContext(question, storagePaths, entities) {
+    const contextRequest = {
+      question,
+      max_sources: this.maxSources,
+    };
+    if (storagePaths && storagePaths.length > 0) {
+      contextRequest.storage_paths = storagePaths;
+    }
+
+    // Issue the original broad query
+    const mainResp = await axios.post(`${this.baseUrl}/context`, contextRequest);
+    const mainData = mainResp.data;
+    let allContext = mainData.context || '';
+    const seenDocIds = new Set((mainData.sources || []).map(s => s.doc_id));
+    let allSources = [...(mainData.sources || [])];
+
+    // Issue a targeted sub-query per entity, collecting only NEW documents
+    const subQueries = entities.map(name => {
+      const subReq = { ...contextRequest, question: `${name} ${question}`, max_sources: 5 };
+      return axios.post(`${this.baseUrl}/context`, subReq).catch(() => null);
+    });
+    const subResults = await Promise.all(subQueries);
+
+    for (const res of subResults) {
+      if (!res || !res.data) continue;
+      for (const src of (res.data.sources || [])) {
+        if (!seenDocIds.has(src.doc_id)) {
+          seenDocIds.add(src.doc_id);
+          allSources.push(src);
+          // Append this doc's context snippet
+          if (res.data.context) {
+            allContext += '\n\n' + res.data.context;
+          }
+        }
+      }
+    }
+
+    console.log(`[RAG] Multi-query: ${entities.length} sub-queries, ${allSources.length} unique sources (was ${mainData.sources?.length || 0})`);
+    return { context: allContext, sources: allSources };
+  }
+
+  /**
    * Detect if a question is a follow-up that refers to the previous answer
    * (e.g. "show as a table", "summarize that", "explain more")
    */
@@ -116,16 +178,24 @@ class RagService {
         console.log('[RAG] Follow-up detected, skipping document retrieval');
       } else {
         // 1. Get context from the RAG service
-        const contextRequest = { 
-          question,
-          max_sources: this.maxSources
-        };
-        if (storagePaths && storagePaths.length > 0) {
-          contextRequest.storage_paths = storagePaths;
+        // Detect multi-entity queries and use sub-queries for better recall
+        const entities = this._extractNamedEntities(question);
+        let contextData;
+
+        if (entities.length >= 2) {
+          // Broad query mentioning multiple people/entities — use multi-query retrieval
+          contextData = await this._multiQueryContext(question, storagePaths, entities);
+        } else {
+          const contextRequest = { 
+            question,
+            max_sources: this.maxSources
+          };
+          if (storagePaths && storagePaths.length > 0) {
+            contextRequest.storage_paths = storagePaths;
+          }
+          const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
+          contextData = response.data;
         }
-        const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
-        
-        const contextData = response.data;
         enhancedContext = contextData.context;
         sources = contextData.sources || [];
         
