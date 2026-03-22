@@ -49,19 +49,28 @@ router.post('/ask', async (req, res) => {
       session = await chatHistoryService.getSession(activeSessionId);
     }
     
-    // Build chat history from session for context
+    // Build chat history from session for context.
+    // Use a character budget (100K) filled from most-recent messages backward so
+    // the latest exchanges always have full fidelity and older ones are truncated
+    // only when the budget is exhausted.
     let chatHistory = [];
     if (session && session.messages) {
-      // Build chat history: keep the last assistant message in full (follow-ups need it),
-      // truncate older assistant messages to save context space, keep user messages in full.
+      const HISTORY_BUDGET = 100_000; // characters
       const lastMessages = session.messages.slice(-10);
-      const lastAssistantIdx = lastMessages.map(m => m.role).lastIndexOf('assistant');
-      chatHistory = lastMessages.map((m, i) => ({
-        role: m.role,
-        content: (m.role === 'assistant' && i !== lastAssistantIdx)
-          ? m.content.substring(0, 500)
-          : m.content
-      }));
+      let remaining = HISTORY_BUDGET;
+
+      // Walk backward so recent messages get priority
+      for (let i = lastMessages.length - 1; i >= 0; i--) {
+        const m = lastMessages[i];
+        let content = m.content;
+        if (remaining <= 0) {
+          content = content.substring(0, 200) + '…';
+        } else if (content.length > remaining) {
+          content = content.substring(0, remaining) + '…';
+        }
+        remaining -= content.length;
+        chatHistory.unshift({ role: m.role, content });
+      }
     }
     
     // Save user message to history
