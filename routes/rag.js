@@ -52,9 +52,15 @@ router.post('/ask', async (req, res) => {
     // Build chat history from session for context
     let chatHistory = [];
     if (session && session.messages) {
-      chatHistory = session.messages.slice(-10).map(m => ({
+      // Build chat history: keep the last assistant message in full (follow-ups need it),
+      // truncate older assistant messages to save context space, keep user messages in full.
+      const lastMessages = session.messages.slice(-10);
+      const lastAssistantIdx = lastMessages.map(m => m.role).lastIndexOf('assistant');
+      chatHistory = lastMessages.map((m, i) => ({
         role: m.role,
-        content: m.role === 'user' ? m.content : m.content.substring(0, 500)
+        content: (m.role === 'assistant' && i !== lastAssistantIdx)
+          ? m.content.substring(0, 500)
+          : m.content
       }));
     }
     
@@ -65,8 +71,9 @@ router.post('/ask', async (req, res) => {
     
     const result = await ragService.askQuestion(question, chatHistory, storagePaths || []);
     
-    // Save assistant response to history
-    if (activeSessionId) {
+    // Only save successful answers to history (not error fallback messages)
+    const isError = result.answer.startsWith('An error occurred') || result.answer.startsWith('This information is not contained');
+    if (activeSessionId && !isError) {
       await chatHistoryService.addMessage(activeSessionId, 'assistant', result.answer, result.sources);
     }
     
