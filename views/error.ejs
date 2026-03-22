@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><%= title %> - Paperless-AI</title>
+    <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body class="h-full bg-secondary">
+    <div class="min-h-screen flex items-center justify-center px-4">
+        <div class="material-card w-full max-w-md text-center">
+            <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-red-100 mb-4">
+                <i class="fas fa-lock text-red-600 text-2xl"></i>
+            </div>
+            <h2 class="text-xl font-bold mb-2"><%= title %></h2>
+            <p class="text-gray-600 mb-6"><%= message %></p>
+            <a href="/dashboard" class="inline-flex items-center text-blue-600 hover:text-blue-700">
+                <i class="fas fa-arrow-left mr-2"></i> Back to Dashboard
+            </a>
+        </div>
+    </div>
+</body>
+</html>

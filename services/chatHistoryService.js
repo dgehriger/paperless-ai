@@ -24,11 +24,12 @@ class ChatHistoryService {
     return path.join(HISTORY_DIR, `${safe}.json`);
   }
 
-  async createSession(title) {
+  async createSession(title, userId = null) {
     const sessionId = crypto.randomUUID();
     const session = {
       id: sessionId,
       title: title || 'New Chat',
+      userId: userId || null,
       created: new Date().toISOString(),
       updated: new Date().toISOString(),
       messages: []
@@ -68,7 +69,11 @@ class ChatHistoryService {
     return session;
   }
 
-  async listSessions() {
+  /**
+   * List sessions, optionally filtered by userId.
+   * If userId is null, returns all sessions (backward compat for local mode).
+   */
+  async listSessions(userId = null) {
     await this._ensureDir();
     const files = await fs.readdir(HISTORY_DIR);
     const sessions = [];
@@ -78,9 +83,12 @@ class ChatHistoryService {
       try {
         const data = await fs.readFile(path.join(HISTORY_DIR, file), 'utf-8');
         const session = JSON.parse(data);
+        // Filter by userId if provided
+        if (userId && session.userId && session.userId !== userId) continue;
         sessions.push({
           id: session.id,
           title: session.title,
+          userId: session.userId || null,
           created: session.created,
           updated: session.updated,
           messageCount: session.messages.length

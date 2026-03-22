@@ -3,6 +3,34 @@ const express = require('express');
 const router = express.Router();
 const ragService = require('../services/ragService');
 const chatHistoryService = require('../services/chatHistoryService');
+const userModel = require('../models/userModel');
+const { AUTH_MODE } = require('../middleware/cfAuth');
+
+/**
+ * Get the current user's ID (or null in local mode)
+ */
+function getUserId(req) {
+  if (AUTH_MODE === 'cf_access' && req.cfUser) return req.cfUser.id;
+  return null;
+}
+
+/**
+ * Get the effective storage paths for the current user.
+ * Merges explicitly requested paths with library-based filters.
+ */
+function getEffectiveStoragePaths(req, requestedPaths = []) {
+  if (AUTH_MODE === 'cf_access' && req.cfUser && !req.cfUser.is_admin) {
+    const filters = userModel.getLibraryFilters(req.cfUser.id);
+    if (filters.storagePaths.length > 0) {
+      // If user has library restrictions, intersect with requested paths
+      if (requestedPaths.length > 0) {
+        return requestedPaths.filter(p => filters.storagePaths.includes(p));
+      }
+      return filters.storagePaths;
+    }
+  }
+  return requestedPaths;
+}
 
 /**
  * Search documents
@@ -38,12 +66,15 @@ router.post('/ask', async (req, res) => {
     if (!question) {
       return res.status(400).json({ error: 'Question is required' });
     }
+
+    const userId = getUserId(req);
+    const effectivePaths = getEffectiveStoragePaths(req, storagePaths || []);
     
     // Get or create a session for chat history
     let session = null;
     let activeSessionId = sessionId;
     if (!activeSessionId) {
-      session = await chatHistoryService.createSession();
+      session = await chatHistoryService.createSession(undefined, userId);
       activeSessionId = session.id;
     } else {
       session = await chatHistoryService.getSession(activeSessionId);
@@ -78,7 +109,7 @@ router.post('/ask', async (req, res) => {
       await chatHistoryService.addMessage(activeSessionId, 'user', question);
     }
     
-    const result = await ragService.askQuestion(question, chatHistory, storagePaths || []);
+    const result = await ragService.askQuestion(question, chatHistory, effectivePaths);
     
     // Only save successful answers to history (not error fallback messages)
     const isError = result.answer.startsWith('An error occurred') || result.answer.startsWith('This information is not contained');
@@ -98,7 +129,8 @@ router.post('/ask', async (req, res) => {
  */
 router.get('/history', async (req, res) => {
   try {
-    const sessions = await chatHistoryService.listSessions();
+    const userId = getUserId(req);
+    const sessions = await chatHistoryService.listSessions(userId);
     res.json(sessions);
   } catch (error) {
     console.error('Error in /api/rag/history:', error);
@@ -257,6 +289,28 @@ router.post('/initialize', async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error('Error in /api/rag/initialize:', error);
+    res.status(500).json({ error: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * Create a share link for a chat session
+ */
+router.post('/history/:id/share', async (req, res) => {
+  try {
+    const userId = getUserId(req);
+    const session = await chatHistoryService.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+    // Only owner or admin can share
+    if (userId && session.userId && session.userId !== userId) {
+      if (!req.cfUser?.is_admin) {
+        return res.status(403).json({ error: 'Not authorized to share this session' });
+      }
+    }
+    const { token, expiresAt } = userModel.createShareToken(req.params.id, userId || 'local');
+    res.json({ shareUrl: `/shared/${token}`, expiresAt });
+  } catch (error) {
+    console.error('Error creating share link:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
   }
 });
