@@ -223,25 +223,39 @@ class RagService {
       // Build concise conversation context for the check
       let historySnippet = '';
       if (chatHistory && chatHistory.length > 0) {
-        const recent = chatHistory.slice(-4);
+        const recent = chatHistory.slice(-6);
         historySnippet = recent.map(m =>
-          `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 300)}`
+          `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 600)}`
         ).join('\n');
+      }
+
+      // Include both the start AND end of the answer so the checker sees
+      // any "not found" / "not in the documents" notes at the bottom
+      let answerExcerpt;
+      if (answer.length <= 3000) {
+        answerExcerpt = answer;
+      } else {
+        answerExcerpt = answer.substring(0, 2000) + '\n[...]\n' + answer.substring(answer.length - 1000);
       }
 
       const checkPrompt =
         'You are a quality-assurance reviewer for a document-retrieval system.\n' +
         'Given the user\'s question, the conversation history, and the generated answer, ' +
-        'decide whether the answer fully addresses every part of the question.\n\n' +
-        'If the answer is complete, return: {"complete": true}\n' +
+        'decide whether the answer fully addresses EVERY part of the question for EVERY ' +
+        'entity (person, company, insurer, etc.) mentioned or implied.\n\n' +
+        'CRITICAL RULE: If the answer says that certain information "could not be found", ' +
+        '"is not contained in the documents", "is not available", or similar — that counts as ' +
+        'INCOMPLETE. The system should search harder with different queries.\n\n' +
+        'If the answer is truly complete for all entities, return: {"complete": true}\n' +
         'If the answer is missing information for some entities or aspects, return:\n' +
         '{"complete": false, "refinedQueries": ["query1", "query2"]}\n' +
-        'The refined queries should be targeted document-search terms (names, numbers, keywords) ' +
-        'designed to find the missing information. Return at most 3 queries.\n\n' +
+        'The refined queries should be very specific document-search terms designed to find ' +
+        'the missing information. Include entity names, insurer names, policy types, or other ' +
+        'specific identifiers. Return at most 5 queries.\n\n' +
         'Return ONLY valid JSON, no explanation.\n\n' +
         (historySnippet ? `Conversation history:\n${historySnippet}\n\n` : '') +
         `Question: ${question}\n\n` +
-        `Answer:\n${answer.substring(0, 1500)}\n`;
+        `Answer:\n${answerExcerpt}\n`;
 
       const raw = await aiService.generateText(checkPrompt, aiOpts);
       const jsonMatch = raw.match(/\{[\s\S]*?\}/);
@@ -250,6 +264,7 @@ class RagService {
       if (parsed.complete) return null;
       const queries = (parsed.refinedQueries || []).filter(q => typeof q === 'string' && q.length > 0);
       if (queries.length === 0) return null;
+      console.log(`[RAG] Completeness check: answer incomplete, refined queries: ${queries.join(', ')}`);
       return { queries };
     } catch (err) {
       console.warn('[RAG] Completeness check failed, skipping refinement:', err.message);
@@ -374,9 +389,9 @@ class RagService {
           const existingDocIds = new Set(sources.map(s => s.doc_id));
           const newSources = [];
 
-          for (const refinedQ of refinement.queries.slice(0, 3)) {
+          for (const refinedQ of refinement.queries.slice(0, 5)) {
             try {
-              const contextRequest = { question: refinedQ, max_sources: 5 };
+              const contextRequest = { question: refinedQ, max_sources: 8 };
               if (storagePaths && storagePaths.length > 0) contextRequest.storage_paths = storagePaths;
               const resp = await axios.post(`${this.baseUrl}/context`, contextRequest);
               for (const src of (resp.data.sources || [])) {
