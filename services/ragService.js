@@ -152,6 +152,112 @@ class RagService {
   }
 
   /**
+   * Build a search query enriched with the full conversation sliding window.
+   * Recent messages get priority; the total context is capped to keep the
+   * vector search focused.
+   */
+  _buildEnrichedSearchQuery(question, chatHistory) {
+    if (!chatHistory || chatHistory.length === 0) return question;
+
+    const SEARCH_CONTEXT_BUDGET = 2000; // chars for search enrichment
+    const contextParts = [];
+    let budget = SEARCH_CONTEXT_BUDGET;
+
+    // Walk from most recent to oldest so recent context gets priority
+    for (let i = chatHistory.length - 1; i >= 0 && budget > 0; i--) {
+      const m = chatHistory[i];
+      const prefix = m.role === 'user' ? 'Q: ' : 'A: ';
+      const maxPerMsg = Math.min(m.content.length, Math.max(100, budget));
+      const snippet = m.content.substring(0, maxPerMsg);
+      contextParts.unshift(prefix + snippet);
+      budget -= snippet.length;
+    }
+
+    if (contextParts.length > 0) {
+      return question + '\n\nConversation context:\n' + contextParts.join('\n');
+    }
+    return question;
+  }
+
+  /**
+   * Fetch full document content for a list of sources.
+   * Returns the concatenated document blocks as a string, or '' if none.
+   */
+  async _fetchFullDocContents(sources, currentContextLength = 0) {
+    const MAX_CHARS_PER_DOC = 50000;  // ~12.5K tokens per doc
+    const MAX_TOTAL_CONTEXT = 500000; // ~125K tokens total context
+    let totalChars = currentContextLength;
+    const fullDocContents = [];
+
+    for (const source of sources) {
+      if (totalChars >= MAX_TOTAL_CONTEXT) break;
+      if (!source.doc_id) continue;
+      try {
+        let fullContent = await paperlessService.getDocumentContent(source.doc_id);
+        if (fullContent.length > MAX_CHARS_PER_DOC) {
+          fullContent = fullContent.substring(0, MAX_CHARS_PER_DOC) + '\n[... document truncated ...]';
+        }
+        const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
+        if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
+        if (source.date) metaParts.push(`Date: ${source.date}`);
+        if (source.tags) metaParts.push(`Tags: ${source.tags}`);
+        if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
+        const metaHeader = metaParts.join(' | ');
+        const docBlock = `--- Document [${metaHeader}] ---\n${fullContent}`;
+        fullDocContents.push(docBlock);
+        totalChars += docBlock.length;
+      } catch (error) {
+        console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
+      }
+    }
+    return fullDocContents.length > 0 ? fullDocContents.join('\n\n') : '';
+  }
+
+  /**
+   * After a first-pass answer, ask the LLM whether the answer is complete.
+   * If not, it returns up to 3 refined search queries to find missing info.
+   * Returns null if the answer is deemed complete.
+   */
+  async _checkAndRefine(aiService, aiOpts, question, answer, chatHistory) {
+    try {
+      // Build concise conversation context for the check
+      let historySnippet = '';
+      if (chatHistory && chatHistory.length > 0) {
+        const recent = chatHistory.slice(-4);
+        historySnippet = recent.map(m =>
+          `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content.substring(0, 300)}`
+        ).join('\n');
+      }
+
+      const checkPrompt =
+        'You are a quality-assurance reviewer for a document-retrieval system.\n' +
+        'Given the user\'s question, the conversation history, and the generated answer, ' +
+        'decide whether the answer fully addresses every part of the question.\n\n' +
+        'If the answer is complete, return: {"complete": true}\n' +
+        'If the answer is missing information for some entities or aspects, return:\n' +
+        '{"complete": false, "refinedQueries": ["query1", "query2"]}\n' +
+        'The refined queries should be targeted document-search terms (names, numbers, keywords) ' +
+        'designed to find the missing information. Return at most 3 queries.\n\n' +
+        'Return ONLY valid JSON, no explanation.\n\n' +
+        (historySnippet ? `Conversation history:\n${historySnippet}\n\n` : '') +
+        `Question: ${question}\n\n` +
+        `Answer:\n${answer.substring(0, 1500)}\n`;
+
+      const raw = await aiService.generateText(checkPrompt, aiOpts);
+      const jsonMatch = raw.match(/\{[\s\S]*?\}/);
+      if (!jsonMatch) return null;
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.complete) return null;
+      const queries = (parsed.refinedQueries || []).filter(q => typeof q === 'string' && q.length > 0);
+      if (queries.length === 0) return null;
+      return { queries };
+    } catch (err) {
+      console.warn('[RAG] Completeness check failed, skipping refinement:', err.message);
+      return null;
+    }
+  }
+
+  /**
    * Check if the RAG service is available and ready
    * @returns {Promise<{status: string, index_ready: boolean, data_loaded: boolean}>}
    */
@@ -204,6 +310,9 @@ class RagService {
       // Detect follow-up questions that only need reformatting (e.g. "show as a table")
       const isReformatOnly = chatHistory.length > 0 && this._isFollowUpQuestion(question);
 
+      const aiService = AIServiceFactory.getService();
+      const aiOpts = this.ragChatModel ? { model: this.ragChatModel } : {};
+
       let enhancedContext = '';
       let sources = [];
 
@@ -211,22 +320,9 @@ class RagService {
         // Pure reformatting — skip RAG retrieval, the LLM has the answer in chatHistory
         console.log('[RAG] Reformat-only follow-up detected, skipping document retrieval');
       } else {
-        // 1. Get context from the RAG service
-        // When there's conversation history, enrich the query with context from the
-        // last exchange so the vector search finds relevant documents (e.g. user asks
-        // about "health insurances" first, then "give me the policy numbers" — the
-        // second query needs the insurance names from the previous answer).
-        let searchQuery = question;
-        if (chatHistory.length > 0) {
-          const lastAssistant = [...chatHistory].reverse().find(m => m.role === 'assistant');
-          const lastUser = [...chatHistory].reverse().find(m => m.role === 'user');
-          if (lastAssistant) {
-            // Take a compact excerpt of the last exchange to enrich the search
-            const prevContext = (lastUser ? lastUser.content : '').substring(0, 200)
-              + ' ' + lastAssistant.content.substring(0, 500);
-            searchQuery = question + '\n\nContext from previous conversation:\n' + prevContext;
-          }
-        }
+        // 1. Build search query enriched with the FULL conversation sliding window
+        // (all prior Q&A pairs, recent-first, capped at 2000 chars)
+        const searchQuery = this._buildEnrichedSearchQuery(question, chatHistory);
 
         // Use LLM to detect multi-entity queries and decompose into sub-queries
         const entities = await this._decomposeQuery(question, systemInstruction);
@@ -246,47 +342,17 @@ class RagService {
           const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
           contextData = response.data;
         }
-        enhancedContext = contextData.context;
+        enhancedContext = contextData.context || '';
         sources = contextData.sources || [];
         
-        // 2. Fetch full content for each source document, with per-doc and total size limits
-        const MAX_CHARS_PER_DOC = 50000;  // ~12.5K tokens per doc
-        const MAX_TOTAL_CONTEXT = 500000; // ~125K tokens total context
-        let totalChars = enhancedContext.length;
-        
-        if (sources.length > 0) {
-          const fullDocContents = [];
-          for (const source of sources) {
-            if (totalChars >= MAX_TOTAL_CONTEXT) break;
-            if (!source.doc_id) continue;
-            try {
-              let fullContent = await paperlessService.getDocumentContent(source.doc_id);
-              if (fullContent.length > MAX_CHARS_PER_DOC) {
-                fullContent = fullContent.substring(0, MAX_CHARS_PER_DOC) + '\n[... document truncated ...]';
-              }
-              const metaParts = [`Title: ${source.title || 'Document ' + source.doc_id}`];
-              if (source.correspondent) metaParts.push(`Correspondent: ${source.correspondent}`);
-              if (source.date) metaParts.push(`Date: ${source.date}`);
-              if (source.tags) metaParts.push(`Tags: ${source.tags}`);
-              if (source.storage_path) metaParts.push(`Storage Path: ${source.storage_path}`);
-              const metaHeader = metaParts.join(' | ');
-              const docBlock = `--- Document [${metaHeader}] ---\n${fullContent}`;
-              fullDocContents.push(docBlock);
-              totalChars += docBlock.length;
-            } catch (error) {
-              console.error(`Error fetching content for document ${source.doc_id}:`, error.message);
-            }
-          }
-          if (fullDocContents.length > 0) {
-            enhancedContext = enhancedContext + '\n\n' + fullDocContents.join('\n\n');
-          }
+        // 2. Fetch full content for each source document
+        const fullDocs = await this._fetchFullDocContents(sources, enhancedContext.length);
+        if (fullDocs) {
+          enhancedContext = enhancedContext + '\n\n' + fullDocs;
         }
       }
       
-      // 3. Use AI service to generate an answer based on the enhanced context
-      const aiService = AIServiceFactory.getService();
-      
-      // Build conversation history context if available
+      // 3. Build full conversation history context for the LLM prompt
       let historyContext = '';
       if (chatHistory && chatHistory.length > 0) {
         historyContext = '\n\nPrevious conversation:\n' + chatHistory.map(msg => 
@@ -294,55 +360,49 @@ class RagService {
         ).join('\n') + '\n\n';
       }
       
-      // Create a language-agnostic prompt that works in any language
-      let prompt;
-      if (isReformatOnly) {
-        // Follow-up: no document context, rely entirely on chat history
-        prompt = `
-        ${systemInstruction}
+      // 4. Generate first-pass answer
+      let answer = await this._generateAnswer(aiService, aiOpts, systemInstruction,
+        question, enhancedContext, historyContext, isReformatOnly);
 
-        The user is asking a follow-up question about your previous answer. Use the conversation history to respond.
-        ${historyContext}
-        Follow-up question: ${question}
+      // 5. Multi-stage retrieval: if the first-pass answer is incomplete, run
+      //    refined queries to find missing documents, then re-generate (max 1 retry)
+      if (!isReformatOnly && sources.length > 0) {
+        const refinement = await this._checkAndRefine(aiService, aiOpts, question, answer, chatHistory);
+        if (refinement && refinement.queries.length > 0) {
+          console.log(`[RAG] Answer incomplete — running ${refinement.queries.length} refined queries: ${refinement.queries.join(', ')}`);
 
-        Important instructions:
-        - Base your answer on the previous conversation — reformat, summarize, or elaborate as requested
-        - Answer in the same language as the question was asked
-        - Use markdown formatting for structure (headers, bullet points, bold, tables, etc.) when appropriate
-        `;
-      } else {
-        prompt = `
-        ${systemInstruction}
+          const existingDocIds = new Set(sources.map(s => s.doc_id));
+          const newSources = [];
 
-        Answer the following question precisely, based on the provided documents:
-        ${historyContext}
-        Question: ${question}
+          for (const refinedQ of refinement.queries.slice(0, 3)) {
+            try {
+              const contextRequest = { question: refinedQ, max_sources: 5 };
+              if (storagePaths && storagePaths.length > 0) contextRequest.storage_paths = storagePaths;
+              const resp = await axios.post(`${this.baseUrl}/context`, contextRequest);
+              for (const src of (resp.data.sources || [])) {
+                if (!existingDocIds.has(src.doc_id)) {
+                  existingDocIds.add(src.doc_id);
+                  newSources.push(src);
+                }
+              }
+            } catch (err) {
+              console.warn(`[RAG] Refined query failed: ${err.message}`);
+            }
+          }
 
-        Context from relevant documents:
-        ${enhancedContext}
+          if (newSources.length > 0) {
+            console.log(`[RAG] Refined search found ${newSources.length} new documents`);
+            const newDocContents = await this._fetchFullDocContents(newSources, enhancedContext.length);
+            if (newDocContents) {
+              enhancedContext += '\n\n' + newDocContents;
+            }
+            sources = [...sources, ...newSources];
 
-        Important instructions:
-        - Each document is delimited by --- Document [...] --- and includes metadata (Title, Correspondent, Date, Tags, Storage Path) — use this metadata to accurately identify and distinguish documents
-        - Use ONLY information from the provided documents
-        - If the answer is not contained in the documents, respond: "This information is not contained in the documents." (in the same language as the question)
-        - Avoid assumptions or speculation beyond the given context
-        - Answer in the same language as the question was asked
-        - Do not mention document numbers or source references, answer as if it were a natural conversation
-        - Use markdown formatting for structure (headers, bullet points, bold, etc.) when appropriate
-        `;
-      }
-
-      let answer;
-      try {
-        // If a specific RAG chat model is configured, temporarily override the model
-        if (this.ragChatModel) {
-          answer = await aiService.generateText(prompt, { model: this.ragChatModel });
-        } else {
-          answer = await aiService.generateText(prompt);
+            // Re-generate answer with the expanded document context
+            answer = await this._generateAnswer(aiService, aiOpts, systemInstruction,
+              question, enhancedContext, historyContext, false);
+          }
         }
-      } catch (error) {
-        console.error('Error generating answer with AI service:', error);
-        answer = "An error occurred while generating an answer. Please try again later.";
       }
       
       return {
@@ -353,6 +413,54 @@ class RagService {
     } catch (error) {
       console.error('Error in askQuestion:', error);
       throw new Error("An error occurred while processing your question. Please try again later.");
+    }
+  }
+
+  /**
+   * Generate an answer from the LLM given system instruction, question, context, and history.
+   */
+  async _generateAnswer(aiService, aiOpts, systemInstruction, question, enhancedContext, historyContext, isReformatOnly) {
+    let prompt;
+    if (isReformatOnly) {
+      prompt = `
+      ${systemInstruction}
+
+      The user is asking a follow-up question about your previous answer. Use the conversation history to respond.
+      ${historyContext}
+      Follow-up question: ${question}
+
+      Important instructions:
+      - Base your answer on the previous conversation — reformat, summarize, or elaborate as requested
+      - Answer in the same language as the question was asked
+      - Use markdown formatting for structure (headers, bullet points, bold, tables, etc.) when appropriate
+      `;
+    } else {
+      prompt = `
+      ${systemInstruction}
+
+      Answer the following question precisely, based on the provided documents:
+      ${historyContext}
+      Question: ${question}
+
+      Context from relevant documents:
+      ${enhancedContext}
+
+      Important instructions:
+      - Each document is delimited by --- Document [...] --- and includes metadata (Title, Correspondent, Date, Tags, Storage Path) — use this metadata to accurately identify and distinguish documents
+      - Use ONLY information from the provided documents
+      - If the answer is not contained in the documents, respond: "This information is not contained in the documents." (in the same language as the question)
+      - Avoid assumptions or speculation beyond the given context
+      - Answer in the same language as the question was asked
+      - Do not mention document numbers or source references, answer as if it were a natural conversation
+      - Use markdown formatting for structure (headers, bullet points, bold, etc.) when appropriate
+      `;
+    }
+
+    try {
+      return await aiService.generateText(prompt, aiOpts);
+    } catch (error) {
+      console.error('Error generating answer with AI service:', error);
+      return "An error occurred while generating an answer. Please try again later.";
     }
   }
 
