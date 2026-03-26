@@ -14,6 +14,12 @@ services:
       - PAPERLESS_AI_PORT=${PAPERLESS_AI_PORT:-3000}
       - RAG_SERVICE_URL=http://localhost:8000
       - RAG_SERVICE_ENABLED=true
+      # Authentication: 'local' (default, JWT login) or 'cf_access' (Cloudflare tunnel)
+      - AUTH_MODE=${AUTH_MODE:-local}
+      # Comma-separated emails auto-promoted to admin (cf_access mode only)
+      - ADMIN_EMAILS=${ADMIN_EMAILS:-}
+      # Dev bypass: set to an email to auto-authenticate in dev (NEVER use in production)
+      # - DEV_USER_EMAIL=
     ports:
       - "3000:${PAPERLESS_AI_PORT:-3000}"
     volumes:

@@ -2,9 +2,12 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Paperless-AI RAG</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <style>
         :root {
             --primary-color: #6366f1;
@@ -19,10 +22,10 @@
             --bg-secondary: #f9fafb;
             --bg-tertiary: #f3f4f6;
             --border-color: #e5e7eb;
-            --shadow-color: rgba(0, 0, 0, 0.1);
+            --shadow-color: rgba(0, 0, 0, 0.05);
             --source-bg: #f8fafc;
             --source-border: #e2e8f0;
-            --ai-message-bg: #f0f9ff;
+            --ai-message-bg: transparent;
             --user-message-bg: #f3f4f6;
             --user-message-text: #111827;
             --assistant-message-text: #0c4a6e;
@@ -43,10 +46,10 @@
             --bg-secondary: #1f2937;
             --bg-tertiary: #374151;
             --border-color: #374151;
-            --shadow-color: rgba(0, 0, 0, 0.5);
+            --shadow-color: rgba(0, 0, 0, 0.3);
             --source-bg: #1e293b;
             --source-border: #334155;
-            --ai-message-bg: #0f172a;
+            --ai-message-bg: transparent;
             --user-message-bg: #1f2937;
             --user-message-text: #f9fafb;
             --assistant-message-text: #e0f2fe;
@@ -58,7 +61,12 @@
             margin: 0;
             padding: 0;
             box-sizing: border-box;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        }
+
+        html {
+            font-size: 15px;
+            overflow-x: hidden;
         }
 
         body {
@@ -67,24 +75,26 @@
             transition: background-color 0.3s ease, color 0.3s ease;
             display: flex;
             flex-direction: column;
-            min-height: 100vh;
+            height: 100vh;
+            height: 100dvh;
+            overflow: hidden;
+            overflow-x: hidden;
         }
 
         header {
             background-color: var(--bg-secondary);
             border-bottom: 1px solid var(--border-color);
-            padding: 1rem;
+            padding: 0.625rem 1rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
-            box-shadow: 0 2px 4px var(--shadow-color);
         }
 
         .logo {
             display: flex;
             align-items: center;
-            font-weight: 700;
-            font-size: 1.5rem;
+            font-weight: 600;
+            font-size: 1.125rem;
             color: var(--primary-color);
         }
 
@@ -102,7 +112,7 @@
             background: none;
             border: none;
             cursor: pointer;
-            font-size: 1.25rem;
+            font-size: 1rem;
             color: var(--text-secondary);
             transition: color 0.2s ease;
         }
@@ -156,10 +166,12 @@
             flex: 1;
             display: flex;
             flex-direction: column;
-            max-width: 1024px;
+            max-width: 1400px;
             width: 100%;
             margin: 0 auto;
             padding: 1rem;
+            min-height: 0;
+            overflow: hidden;
         }
 
         .chat-container {
@@ -168,17 +180,18 @@
             display: flex;
             flex-direction: column;
             gap: 1rem;
-            margin-bottom: 1rem;
-            padding-bottom: 1rem;
+            margin-bottom: 0;
+            padding-bottom: 0.5rem;
+            min-height: 0;
         }
 
         .message {
             max-width: 90%;
-            padding: 1rem;
-            border-radius: 0.5rem;
-            line-height: 1.5;
+            padding: 0.75rem 1rem;
+            border-radius: 1rem;
+            line-height: 1.6;
             animation: fadeIn 0.3s ease-in-out;
-            box-shadow: 0 1px 2px var(--shadow-color);
+            font-size: 0.9375rem;
         }
 
         @keyframes fadeIn {
@@ -190,26 +203,28 @@
             align-self: flex-end;
             background-color: var(--user-message-bg);
             color: var(--user-message-text);
-            border-bottom-right-radius: 0;
+            border-radius: 1.25rem 1.25rem 0.25rem 1.25rem;
         }
 
         .message.assistant {
             align-self: flex-start;
             background-color: var(--ai-message-bg);
             color: var(--assistant-message-text);
-            border-bottom-left-radius: 0;
+            max-width: 100%;
+            padding: 0.5rem 0;
+            border-radius: 0;
         }
 
         .sources-container {
-            margin-top: 0.75rem;
-            padding-top: 0.75rem;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
             border-top: 1px solid var(--source-border);
         }
 
         .sources-title {
-            font-size: 0.875rem;
+            font-size: 0.75rem;
             font-weight: 600;
-            margin-bottom: 0.5rem;
+            margin-bottom: 0.375rem;
             color: var(--text-secondary);
             display: flex;
             align-items: center;
@@ -231,12 +246,18 @@
         }
 
         .source {
-            font-size: 0.8125rem;
-            padding: 0.5rem;
+            font-size: 0.75rem;
+            padding: 0.375rem 0.5rem;
             background-color: var(--source-bg);
             border: 1px solid var(--source-border);
-            border-radius: 0.25rem;
-            margin-bottom: 0.5rem;
+            border-radius: 0.375rem;
+            margin-bottom: 0.375rem;
+            transition: border-color 0.2s ease, background-color 0.2s ease;
+        }
+
+        .source-link:hover .source {
+            border-color: var(--primary-color);
+            background-color: var(--bg-tertiary);
         }
 
         .source-title {
@@ -252,21 +273,29 @@
         }
 
         .input-container {
-            position: relative;
-            margin-top: auto;
+            flex-shrink: 0;
+            margin-top: 0.5rem;
+            padding-top: 0.5rem;
+            border-top: 1px solid var(--border-color);
+        }
+
+        .input-row {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
         }
 
         .message-input {
-            width: 100%;
-            padding: 1rem;
-            padding-right: 4rem;
+            flex: 1;
+            min-width: 0;
+            padding: 0.625rem 0.75rem;
             border: 1px solid var(--border-color);
-            border-radius: 0.5rem;
+            border-radius: 1.25rem;
             background-color: var(--bg-tertiary);
             color: var(--text-color);
-            font-size: 1rem;
+            font-size: 0.9375rem;
             resize: none;
-            min-height: 60px;
+            min-height: 42px;
             max-height: 200px;
             transition: border-color 0.2s ease;
             outline: none;
@@ -278,31 +307,65 @@
         }
 
         .input-controls {
-            position: absolute;
-            right: 0.75rem;
-            bottom: 0.75rem;
             display: flex;
-            gap: 0.5rem;
+            align-items: flex-end;
+            gap: 0.375rem;
+            flex-shrink: 0;
         }
 
-        .ai-toggle {
+        .attach-btn {
             background-color: var(--bg-secondary);
             border: 1px solid var(--border-color);
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 32px;
+            height: 32px;
             display: flex;
             align-items: center;
             justify-content: center;
             cursor: pointer;
             transition: background-color 0.2s ease, color 0.2s ease;
             color: var(--text-tertiary);
+            font-size: 0.875rem;
+            position: relative;
         }
 
-        .ai-toggle.active {
-            background-color: var(--primary-color);
-            color: white;
+        .attach-btn:hover {
+            color: var(--primary-color);
             border-color: var(--primary-color);
+        }
+
+        .attach-btn.has-filter {
+            color: var(--primary-color);
+            border-color: var(--primary-color);
+        }
+
+        /* Storage path popover */
+        .sp-popover {
+            display: none;
+            position: absolute;
+            bottom: calc(100% + 0.5rem);
+            left: 0;
+            width: 280px;
+            background: var(--bg-color);
+            border: 1px solid var(--border-color);
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 16px var(--shadow-color);
+            z-index: 50;
+            padding: 0.75rem;
+        }
+
+        .sp-popover.open {
+            display: block;
+        }
+
+        .sp-popover-title {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+            margin-bottom: 0.5rem;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
         }
 
         .send-button {
@@ -310,8 +373,9 @@
             color: white;
             border: none;
             border-radius: 50%;
-            width: 40px;
-            height: 40px;
+            width: 32px;
+            height: 32px;
+            font-size: 0.8rem;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -331,8 +395,8 @@
         .typing-indicator {
             display: flex;
             align-items: center;
-            margin-top: 0.5rem;
-            font-size: 0.875rem;
+            margin-top: 0.25rem;
+            font-size: 0.8125rem;
             color: var(--text-secondary);
         }
 
@@ -363,63 +427,6 @@
             font-size: 0.875rem;
             color: var(--text-tertiary);
             margin: 1rem 0;
-        }
-
-        .filters {
-            padding: 1rem;
-            background-color: var(--bg-secondary);
-            border-radius: 0.5rem;
-            margin-bottom: 1rem;
-            border: 1px solid var(--border-color);
-        }
-
-        .filters-title {
-            font-weight: 600;
-            margin-bottom: 0.5rem;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            cursor: pointer;
-        }
-
-        .filters-content {
-            display: flex;
-            flex-direction: column;
-            gap: 0.75rem;
-            margin-top: 0.75rem;
-        }
-
-        .filter-row {
-            display: flex;
-            gap: 1rem;
-            flex-wrap: wrap;
-        }
-
-        .filter-group {
-            flex: 1;
-            min-width: 200px;
-        }
-
-        .filter-label {
-            display: block;
-            font-size: 0.875rem;
-            margin-bottom: 0.25rem;
-            color: var(--text-secondary);
-        }
-
-        .filter-input {
-            width: 100%;
-            padding: 0.5rem;
-            border: 1px solid var(--border-color);
-            border-radius: 0.25rem;
-            background-color: var(--bg-tertiary);
-            color: var(--text-color);
-            font-size: 0.875rem;
-        }
-
-        .filter-input:focus {
-            border-color: var(--primary-color);
-            outline: none;
         }
 
         .api-status {
@@ -462,7 +469,7 @@
 
         .back-button a {
             color: var(--primary-color);
-            font-size: 1.25rem;
+            font-size: 1rem;
             transition: color 0.2s ease;
             display: flex;
             align-items: center;
@@ -518,31 +525,95 @@
 
         footer {
             text-align: center;
-            padding: 1rem;
-            font-size: 0.875rem;
+            padding: 0.5rem;
+            font-size: 0.75rem;
             color: var(--text-tertiary);
             background-color: var(--bg-secondary);
             border-top: 1px solid var(--border-color);
         }
 
         @media (max-width: 768px) {
-            .filter-row {
-                flex-direction: column;
-                gap: 0.5rem;
+            header {
+                padding: 0.5rem 0.75rem;
+            }
+
+            .logo {
+                font-size: 1rem;
+            }
+
+            .ai-model-badge {
+                display: none;
+            }
+
+            main {
+                padding: 0.5rem;
+                max-width: 100%;
             }
 
             .message {
-                max-width: 95%;
+                max-width: 100%;
+            }
+
+            .message.assistant {
+                font-size: 0.875rem;
+            }
+
+            .sp-popover {
+                width: 260px;
+            }
+
+            footer {
+                padding: 0.25rem;
+                font-size: 0.6875rem;
+            }
+
+            .doc-viewer {
+                width: 100vw;
+                height: 100vh;
+                border-radius: 0;
+                max-width: none;
+            }
+
+            .doc-viewer-header {
+                padding: 0.5rem 0.75rem;
+            }
+
+            .doc-viewer-title {
+                font-size: 0.8rem;
+            }
+
+            .doc-viewer-actions button span {
+                display: none;
+            }
+
+            .source-card {
+                flex-wrap: wrap;
+            }
+
+            .source-info-meta {
+                flex-direction: column;
+                gap: 0.125rem;
+            }
+
+            .markdown table {
+                font-size: 0.8rem;
+            }
+
+            /* Prevent iOS zoom on input focus (requires font-size >= 16px) */
+            .message-input {
+                font-size: 16px;
             }
         }
 
         /* Markdown styling */
         .markdown {
-            line-height: 1.6;
+            line-height: 1.65;
+            font-size: 0.9375rem;
+            color: inherit;
         }
 
         .markdown p {
-            margin-bottom: 0.75rem;
+            margin-bottom: 0.5rem;
         }
 
         .markdown p:last-child {
@@ -550,58 +621,170 @@
         }
 
         .markdown ul, .markdown ol {
-            padding-left: 1.5rem;
-            margin: 0.75rem 0;
+            padding-left: 1.25rem;
+            margin: 0.375rem 0;
         }
 
         .markdown li {
-            margin-bottom: 0.25rem;
+            margin-bottom: 0.125rem;
+        }
+
+        .markdown li > ul, .markdown li > ol {
+            margin: 0.125rem 0;
         }
 
         .markdown h1, .markdown h2, .markdown h3, .markdown h4 {
-            margin: 1rem 0 0.5rem;
+            margin: 0.875rem 0 0.375rem;
             font-weight: 600;
+            line-height: 1.3;
         }
 
         .markdown h1 {
-            font-size: 1.5rem;
-        }
-
-        .markdown h2 {
             font-size: 1.25rem;
         }
 
-        .markdown h3 {
+        .markdown h2 {
             font-size: 1.125rem;
         }
 
-        .markdown h4 {
+        .markdown h3 {
             font-size: 1rem;
         }
 
+        .markdown h4 {
+            font-size: 0.9375rem;
+        }
+
         .markdown code {
-            font-family: monospace;
+            font-family: 'SF Mono', 'Fira Code', 'Fira Mono', Menlo, Consolas, monospace;
             background-color: var(--source-bg);
-            padding: 0.125rem 0.25rem;
+            padding: 0.125rem 0.3rem;
             border-radius: 0.25rem;
-            font-size: 0.9em;
+            font-size: 0.85em;
+            border: 1px solid var(--border-color);
         }
 
         .markdown pre {
             background-color: var(--source-bg);
             padding: 0.75rem;
-            border-radius: 0.25rem;
+            border-radius: 0.5rem;
             overflow-x: auto;
-            margin: 0.75rem 0;
+            margin: 0.5rem 0;
+            border: 1px solid var(--border-color);
         }
 
         .markdown pre code {
             background-color: transparent;
             padding: 0;
+            border: none;
+            font-size: 0.8125rem;
+        }
+
+        /* Table styling — clean, compact, readable */
+        .markdown table {
+            border-collapse: collapse;
+            width: 100%;
+            margin: 0.5rem 0;
+            font-size: 0.8125rem;
+            line-height: 1.4;
+        }
+
+        .markdown thead th {
+            background-color: var(--bg-tertiary);
+            font-weight: 600;
+            text-align: left;
+            padding: 0.5rem 0.625rem;
+            border-bottom: 2px solid var(--border-color);
+            white-space: nowrap;
+        }
+
+        .markdown tbody td {
+            padding: 0.375rem 0.625rem;
+            border-bottom: 1px solid var(--border-color);
+            vertical-align: top;
+        }
+
+        .markdown tbody tr:last-child td {
+            border-bottom: none;
+        }
+
+        .markdown tbody tr:hover {
+            background-color: var(--bg-tertiary);
+        }
+
+        .markdown blockquote {
+            border-left: 3px solid var(--primary-color);
+            padding: 0.25rem 0 0.25rem 0.75rem;
+            margin: 0.5rem 0;
+            color: var(--text-secondary);
+        }
+
+        .markdown hr {
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 0.75rem 0;
+        }
+
+        .markdown strong {
+            font-weight: 600;
+        }
+
+        .markdown em {
+            font-style: italic;
+            color: var(--text-secondary);
         }
 
         .hidden {
-            display: none;
+            display: none !important;
+        }
+
+        /* Copy button */
+        .message.assistant {
+            position: relative;
+        }
+        .copy-btn {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            opacity: 0;
+            transition: opacity 0.2s ease, color 0.2s ease;
+            z-index: 1;
+        }
+        .message.assistant:hover .copy-btn {
+            opacity: 1;
+        }
+        .copy-btn:hover {
+            color: var(--primary-color);
+        }
+        .copy-btn.copied {
+            color: var(--success-color);
+            opacity: 1;
+        }
+
+        /* Storage path filter */
+        .storage-path-filter {
+            max-height: 180px;
+            overflow-y: auto;
+            padding: 0;
+        }
+        .storage-path-filter label {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.375rem 0.25rem;
+            font-size: 0.8125rem;
+            cursor: pointer;
+            border-radius: 0.25rem;
+        }
+        .storage-path-filter label:hover {
+            background: var(--bg-tertiary);
         }
 
         #error-message {
@@ -614,9 +797,305 @@
             border: 1px solid rgba(239, 68, 68, 0.2);
             animation: fadeIn 0.3s ease-in-out;
         }
+
+        /* Chat history sidebar */
+        .history-toggle {
+            position: fixed;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.75rem 0.5rem;
+            border-radius: 0 0.5rem 0.5rem 0;
+            cursor: pointer;
+            z-index: 100;
+            font-size: 1rem;
+            transition: background 0.2s;
+        }
+        .history-toggle:hover { background: var(--primary-hover); }
+
+        .history-sidebar {
+            position: fixed;
+            left: -320px;
+            top: 0;
+            width: 320px;
+            height: 100vh;
+            background: var(--bg-color);
+            border-right: 1px solid var(--border-color);
+            z-index: 200;
+            transition: left 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 2px 0 8px var(--shadow-color);
+        }
+        .history-sidebar.open { left: 0; }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .history-header h3 { margin: 0; font-size: 1rem; color: var(--text-color); }
+        .history-header button {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            font-size: 1rem;
+            padding: 0.25rem;
+        }
+
+        .history-actions {
+            padding: 0.5rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .history-actions button {
+            width: 100%;
+            padding: 0.5rem;
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            font-size: 0.875rem;
+        }
+        .history-actions button:hover { background: var(--primary-hover); }
+
+        .history-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0.5rem;
+        }
+
+        .history-item {
+            padding: 0.75rem;
+            border-radius: 0.375rem;
+            cursor: pointer;
+            margin-bottom: 0.25rem;
+            border: 1px solid transparent;
+            transition: background 0.15s, border-color 0.15s;
+        }
+        .history-item:hover { background: var(--bg-tertiary); }
+        .history-item.active { border-color: var(--primary-color); background: var(--bg-secondary); }
+        .history-item-title {
+            font-size: 0.875rem;
+            font-weight: 500;
+            color: var(--text-color);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .history-item-meta {
+            font-size: 0.7rem;
+            color: var(--text-tertiary);
+            margin-top: 0.25rem;
+        }
+        .history-item-delete {
+            float: right;
+            background: none;
+            border: none;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            font-size: 0.8rem;
+            padding: 0.125rem 0.25rem;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .history-item:hover .history-item-delete { opacity: 1; }
+        .history-item-delete:hover { color: var(--error-color); }
+
+        /* ====== Improved Source Cards with Thumbnails ====== */
+        .source-card {
+            display: flex;
+            gap: 0.625rem;
+            padding: 0.5rem;
+            background-color: var(--source-bg);
+            border: 1px solid var(--source-border);
+            border-radius: 0.5rem;
+            margin-bottom: 0.375rem;
+            transition: border-color 0.2s ease, box-shadow 0.2s ease;
+            cursor: pointer;
+        }
+        .source-card:hover {
+            border-color: var(--primary-color);
+            box-shadow: 0 2px 8px var(--shadow-color);
+        }
+        .source-thumb {
+            flex-shrink: 0;
+            width: 48px;
+            height: 60px;
+            border-radius: 0.25rem;
+            overflow: hidden;
+            background: var(--bg-tertiary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .source-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .source-thumb .thumb-placeholder {
+            color: var(--text-tertiary);
+            font-size: 1.25rem;
+        }
+        .source-info {
+            flex: 1;
+            min-width: 0;
+        }
+        .source-info-title {
+            font-weight: 600;
+            font-size: 0.8rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-bottom: 0.125rem;
+        }
+        .source-info-meta {
+            font-size: 0.7rem;
+            color: var(--text-tertiary);
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+        .source-actions {
+            flex-shrink: 0;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            gap: 0.25rem;
+        }
+        .source-action-btn {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-tertiary);
+            font-size: 0.8rem;
+            padding: 0.25rem;
+            border-radius: 0.25rem;
+            transition: color 0.2s, background-color 0.2s;
+        }
+        .source-action-btn:hover {
+            color: var(--primary-color);
+            background-color: var(--bg-tertiary);
+        }
+
+        /* ====== Document Viewer Modal ====== */
+        .doc-viewer-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.6);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            animation: fadeIn 0.2s ease;
+        }
+        .doc-viewer {
+            background: var(--bg-color);
+            border-radius: 0.75rem;
+            width: 90vw;
+            height: 90vh;
+            max-width: 1200px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.5);
+        }
+        .doc-viewer-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0.75rem 1rem;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+        }
+        .doc-viewer-title {
+            font-weight: 600;
+            font-size: 0.9rem;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            flex: 1;
+            margin-right: 1rem;
+        }
+        .doc-viewer-actions {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .doc-viewer-actions button {
+            background: none;
+            border: 1px solid var(--border-color);
+            border-radius: 0.375rem;
+            padding: 0.375rem 0.75rem;
+            cursor: pointer;
+            color: var(--text-color);
+            font-size: 0.8rem;
+            display: flex;
+            align-items: center;
+            gap: 0.375rem;
+            transition: background-color 0.2s;
+        }
+        .doc-viewer-actions button:hover {
+            background: var(--bg-tertiary);
+        }
+        .doc-viewer-body {
+            flex: 1;
+            overflow: hidden;
+        }
+        .doc-viewer-body iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+
+        /* ====== Share notification ====== */
+        .share-toast {
+            position: fixed;
+            bottom: 1.5rem;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--primary-color);
+            color: white;
+            padding: 0.5rem 1.25rem;
+            border-radius: 0.5rem;
+            font-size: 0.875rem;
+            z-index: 2000;
+            animation: fadeIn 0.2s ease;
+        }
+
+        .header-icon-link {
+            transition: color 0.2s;
+        }
+        .header-icon-link:hover {
+            color: var(--primary-color) !important;
+        }
     </style>
 </head>
 <body>
+    <!-- Chat History Sidebar -->
+    <button class="history-toggle" id="history-toggle" title="Chat History">
+        <i class="fas fa-history"></i>
+    </button>
+    <div class="history-sidebar" id="history-sidebar">
+        <div class="history-header">
+            <h3><i class="fas fa-history"></i> Chat History</h3>
+            <button id="history-close" title="Close"><i class="fas fa-times"></i></button>
+        </div>
+        <div class="history-actions">
+            <button id="new-chat-btn"><i class="fas fa-plus"></i> New Chat</button>
+        </div>
+        <div class="history-list" id="history-list">
+            <!-- Sessions loaded dynamically -->
+        </div>
+    </div>
+
 <header>
         <div class="back-button">
             <a href="/dashboard" title="Back to Dashboard">
@@ -625,17 +1104,26 @@
         </div>
         <div class="logo">
             <i class="fas fa-search"></i>
-            Paperless-AI RAG Chat
+            Paperless-AI RAG
         </div>
         <div class="header-controls">
-            <div class="ai-model-badge" id="ai-model-badge">
-                <i class="fas fa-robot"></i>
-                <span id="ai-model-name">AI: Loading...</span>
-            </div>
             <div class="status-indicator">
                 <div class="status-dot offline" id="status-indicator"></div>
                 <span id="status-text">Connecting...</span>
             </div>
+            <% if (typeof authMode !== 'undefined' && authMode === 'cf_access') { %>
+            <a href="/admin" title="Admin Panel" class="header-icon-link" style="color: var(--text-secondary); font-size: 1.125rem;" id="admin-link">
+                <i class="fas fa-users-cog"></i>
+            </a>
+            <% } %>
+            <% if (typeof readOnly === 'undefined' || !readOnly) { %>
+            <a href="/rag/settings" title="RAG Settings" class="header-icon-link" style="color: var(--text-secondary); font-size: 1.125rem;" id="rag-settings-link">
+                <i class="fas fa-cog"></i>
+            </a>
+            <button class="theme-toggle" id="share-btn" title="Share this conversation" style="display:none;">
+                <i class="fas fa-share-alt"></i>
+            </button>
+            <% } %>
             <button class="theme-toggle" id="theme-toggle">
                 <i class="fas fa-moon"></i>
             </button>
@@ -643,43 +1131,10 @@
     </header>
 
     <main>
-        <div class="filters">
-            <div class="filters-title" id="filters-toggle">
-                <span>API Status</span>
-                <i class="fas fa-chevron-down"></i>
-            </div>
-            <div class="filters-content" id="filters-content">
-                <div class="filter-row" style="display: none;">
-                    <div class="filter-group">
-                        <label class="filter-label" for="date-from">From Date</label>
-                        <input type="date" id="date-from" class="filter-input">
-                    </div>
-                    <div class="filter-group">
-                        <label class="filter-label" for="date-to">To Date</label>
-                        <input type="date" id="date-to" class="filter-input">
-                    </div>
-                    <div class="filter-group">
-                        <label class="filter-label" for="correspondent">Sender/Recipient</label>
-                        <input type="text" id="correspondent" class="filter-input" placeholder="Name of sender/recipient">
-                    </div>
-                </div>
-
-                <div class="api-status" id="api-status">
-                    <!-- Status badges will be loaded dynamically -->
-                </div>
-
-                <div class="action-buttons">
-                    <button class="btn btn-outline" id="check-updates-btn">
-                        <i class="fas fa-sync-alt"></i>
-                        Check for Updates
-                    </button>
-                    <button class="btn btn-primary" id="start-indexing-btn">
-                        <i class="fas fa-database"></i>
-                        Start Indexing
-                    </button>
-                </div>
-            </div>
-        </div>
+        <!-- Hidden filter inputs (kept for JS compatibility) -->
+        <input type="hidden" id="date-from">
+        <input type="hidden" id="date-to">
+        <input type="hidden" id="correspondent">
 
         <div class="chat-container" id="chat-container">
             <div class="system-message">
@@ -697,19 +1152,31 @@
         </div>
 
         <div class="input-container">
-            <textarea 
-                class="message-input" 
-                id="message-input" 
-                placeholder="Ask a question about your documents..." 
-                rows="1"
-                aria-label="Enter message"></textarea>
-            <div class="input-controls">
-                <button class="ai-toggle active" style="visibility: hidden;" id="ai-toggle" aria-label="Toggle AI" title="Enable/disable AI response">
-                    <i class="fas fa-robot"></i>
-                </button>
-                <button class="send-button" id="send-button" aria-label="Send message">
-                    <i class="fas fa-paper-plane"></i>
-                </button>
+            <div class="input-row">
+                <div class="input-controls" style="align-self: flex-end;">
+                    <button class="attach-btn" id="attach-btn" aria-label="Filter by library" title="Filter by library">
+                        <i class="fas fa-plus"></i>
+                        <div class="sp-popover" id="sp-popover">
+                            <div class="sp-popover-title">
+                                <i class="fas fa-book"></i> Libraries
+                            </div>
+                            <div class="storage-path-filter" id="storage-path-filter">
+                                <span style="font-size: 0.8rem; color: var(--text-tertiary);">Loading...</span>
+                            </div>
+                        </div>
+                    </button>
+                </div>
+                <textarea 
+                    class="message-input" 
+                    id="message-input" 
+                    placeholder="Ask a question about your documents..." 
+                    rows="1"
+                    aria-label="Enter message"></textarea>
+                <div class="input-controls">
+                    <button class="send-button" id="send-button" aria-label="Send message">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>
+                </div>
             </div>
         </div>
     </main>
@@ -723,37 +1190,42 @@
         const themeToggle = document.getElementById('theme-toggle');
         const statusIndicator = document.getElementById('status-indicator');
         const statusText = document.getElementById('status-text');
-        const apiStatus = document.getElementById('api-status');
         const chatContainer = document.getElementById('chat-container');
         const messageInput = document.getElementById('message-input');
         const sendButton = document.getElementById('send-button');
         const typingIndicator = document.getElementById('typing-indicator');
-        const filtersToggle = document.getElementById('filters-toggle');
-        const filtersContent = document.getElementById('filters-content');
-        const checkUpdatesBtn = document.getElementById('check-updates-btn');
-        const startIndexingBtn = document.getElementById('start-indexing-btn');
+        const attachBtn = document.getElementById('attach-btn');
+        const spPopover = document.getElementById('sp-popover');
         const errorMessage = document.getElementById('error-message');
         const dateFrom = document.getElementById('date-from');
         const dateTo = document.getElementById('date-to');
         const correspondent = document.getElementById('correspondent');
-        const aiToggle = document.getElementById('ai-toggle');
-        const aiModelBadge = document.getElementById('ai-model-badge');
-        const aiModelName = document.getElementById('ai-model-name');
+        // aiModelBadge/aiModelName removed in header cleanup
 
         // State
         let darkMode = localStorage.getItem('darkMode') === 'true';
         let useAI = localStorage.getItem('useAI') !== 'false'; // Default: true
         let isConnected = false; // Track connection status
+        let currentSessionId = null; // Current chat session ID
+        const paperlessUrl = '<%= paperlessUrl || "" %>';
+
+        // Initialize marked.js for markdown rendering
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true,
+            gfm: true
+        });
 
         // Initialize
         document.addEventListener('DOMContentLoaded', () => {
             updateTheme();
-            updateAIToggle();
             autoResizeTextarea();
             messageInput.addEventListener('input', autoResizeTextarea);
-            
-            // Initialize status badges to "connecting" state
-            updateStatusBadgesLoading();
             
             // Perform initial status check
             checkStatus();
@@ -773,95 +1245,54 @@
                 updateTheme();
             });
             
-            aiToggle.addEventListener('click', () => {
-                useAI = !useAI;
-                localStorage.setItem('useAI', useAI);
-                updateAIToggle();
+            // Storage path popover toggle
+            attachBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                spPopover.classList.toggle('open');
             });
-            
-            filtersToggle.addEventListener('click', () => {
-                filtersContent.classList.toggle('hidden');
-                const icon = filtersToggle.querySelector('i');
-                if (filtersContent.classList.contains('hidden')) {
-                    icon.className = 'fas fa-chevron-down';
-                } else {
-                    icon.className = 'fas fa-chevron-up';
-                }
-            });
-            
-            checkUpdatesBtn.addEventListener('click', async () => {
-                checkUpdatesBtn.disabled = true;
-                checkUpdatesBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
-                
-                try {
-                    const response = await fetch('/api/rag/index/check');
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        showSystemMessage(`Status: ${data.message}`);
-                        isConnected = true;
-                        updateStatusIndicator('online', 'Online');
-                    } else {
-                        showError('Error checking status');
-                        isConnected = false;
-                        updateStatusIndicator('offline', 'Offline');
-                        updateStatusBadgesOffline();
-                    }
-                } catch (error) {
-                    showError(`Connection error: ${error.message}`);
-                    isConnected = false;
-                    updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
-                } finally {
-                    checkUpdatesBtn.disabled = false;
-                    checkUpdatesBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Check for Updates';
-                }
-            });
-            
-            startIndexingBtn.addEventListener('click', async () => {
-                startIndexingBtn.disabled = true;
-                startIndexingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
-                
-                try {
-                    const response = await fetch('/api/rag/index', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            force: true,
-                            background: true
-                        })
-                    });
-                    
-                    if (response.ok) {
-                        const data = await response.json();
-                        showSystemMessage(`Indexing started: ${data.status}`);
-                        updateStatusIndicator('indexing', 'Indexing in progress');
-                        
-                        // Update status badges to show indexing in progress
-                        addStatusBadge(false, 'Indexing', 'In Progress', 'warning');
-                        
-                        isConnected = true;
-                    } else {
-                        showError('Error starting indexing');
-                        isConnected = false;
-                        updateStatusIndicator('offline', 'Offline');
-                        updateStatusBadgesOffline();
-                    }
-                } catch (error) {
-                    showError(`Connection error: ${error.message}`);
-                    isConnected = false;
-                    updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
-                } finally {
-                    startIndexingBtn.disabled = false;
-                    startIndexingBtn.innerHTML = '<i class="fas fa-database"></i> Start Indexing';
+
+            // Close popover when clicking outside
+            document.addEventListener('click', (e) => {
+                if (!attachBtn.contains(e.target)) {
+                    spPopover.classList.remove('open');
                 }
             });
 
+            // Prevent popover from closing when clicking inside it
+            spPopover.addEventListener('click', (e) => {
+                e.stopPropagation();
+            });
+            
             // Poll for status updates every 10 seconds
             setInterval(checkStatus, 10000);
+            
+            // Load storage paths
+            loadStoragePaths();
+
+            // Permission-based UI visibility (cf_access mode)
+            <% if (typeof authMode !== 'undefined' && authMode === 'cf_access') { %>
+            (async function checkPermissions() {
+                try {
+                    const res = await fetch('/api/me');
+                    if (!res.ok) return;
+                    const me = await res.json();
+                    const perms = me.permissions || [];
+                    const isAdmin = me.is_admin;
+                    // Hide RAG settings link if user lacks rag_settings permission
+                    if (!isAdmin && !perms.includes('rag_settings')) {
+                        const ragSettingsLink = document.querySelector('a[href="/rag-settings"]');
+                        if (ragSettingsLink) ragSettingsLink.style.display = 'none';
+                    }
+                    // Hide history toggle if user lacks history permission
+                    if (!isAdmin && !perms.includes('history')) {
+                        const historyToggleBtn = document.getElementById('history-toggle');
+                        if (historyToggleBtn) historyToggleBtn.style.display = 'none';
+                    }
+                } catch (err) {
+                    console.error('Permission check failed:', err);
+                }
+            })();
+            <% } %>
         });
 
         function updateTheme() {
@@ -874,19 +1305,65 @@
             }
         }
 
-        function updateAIToggle() {
-            if (useAI) {
-                aiToggle.classList.add('active');
-                aiToggle.title = 'Disable AI response';
-            } else {
-                aiToggle.classList.remove('active');
-                aiToggle.title = 'Enable AI response';
-            }
-        }
-
         function autoResizeTextarea() {
             messageInput.style.height = 'auto';
             messageInput.style.height = (messageInput.scrollHeight) + 'px';
+        }
+
+        async function loadStoragePaths() {
+            const container = document.getElementById('storage-path-filter');
+            try {
+                const response = await fetch('/api/rag/storage-paths');
+                if (!response.ok) throw new Error('Failed to load');
+                const paths = await response.json();
+                if (paths.length === 0) {
+                    container.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-tertiary);">No storage paths available</span>';
+                    return;
+                }
+                container.innerHTML = '';
+                // "All" option — unchecked by default; checking it disables individual selection
+                const allLabel = document.createElement('label');
+                allLabel.style.fontWeight = '600';
+                allLabel.innerHTML = '<input type="checkbox" id="sp-all"> All (no filter)';
+                container.appendChild(allLabel);
+                const allCheckbox = allLabel.querySelector('#sp-all');
+
+                paths.forEach(p => {
+                    const label = document.createElement('label');
+                    const isDefault = (p.toLowerCase() === 'default');
+                    label.innerHTML = `<input type="checkbox" value="${p.replace(/"/g, '&quot;')}" class="sp-checkbox"${isDefault ? ' checked' : ''}> ${p}`;
+                    container.appendChild(label);
+                });
+
+                // When "All" is toggled, enable/disable individual checkboxes
+                allCheckbox.addEventListener('change', () => {
+                    const boxes = container.querySelectorAll('.sp-checkbox');
+                    if (allCheckbox.checked) {
+                        boxes.forEach(cb => { cb.checked = false; cb.disabled = true; });
+                    } else {
+                        boxes.forEach(cb => { cb.disabled = false; });
+                    }
+                    updateAttachBtnState();
+                });
+
+                // Update attach button indicator when individual paths change
+                container.addEventListener('change', updateAttachBtnState);
+            } catch (err) {
+                container.innerHTML = '<span style="font-size: 0.8rem; color: var(--text-tertiary);">Could not load paths</span>';
+            }
+        }
+
+        function updateAttachBtnState() {
+            const selected = getSelectedStoragePaths();
+            const allCb = document.getElementById('sp-all');
+            const hasFilter = selected.length > 0 || (allCb && allCb.checked);
+            attachBtn.classList.toggle('has-filter', hasFilter);
+        }
+
+        function getSelectedStoragePaths() {
+            const allCheckbox = document.getElementById('sp-all');
+            if (allCheckbox && allCheckbox.checked) return []; // No filter
+            return Array.from(document.querySelectorAll('.sp-checkbox:checked')).map(cb => cb.value);
         }
 
         // Function to check RAG service status
@@ -900,29 +1377,18 @@
                 } else {
                     isConnected = false;
                     updateStatusIndicator('offline', 'Offline');
-                    updateStatusBadgesOffline();
                 }
             } catch (error) {
                 console.error('Error checking status:', error);
                 isConnected = false;
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
             }
         }
 
         function updateStatus(statusData) {
-            // Update AI model info
-            if (statusData.ai_status === 'ok') {
-                const modelName = statusData.ai_model.toUpperCase();
-                aiModelName.textContent = `AI MODEL: ${modelName}`;
-            } else {
-                aiModelName.textContent = 'AI: Not available';
-            }
-            
             // Update status indicator
             if (!statusData.server_up) {
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
                 return;
             }
             
@@ -935,99 +1401,11 @@
             } else {
                 updateStatusIndicator('indexing', 'Loading data');
             }
-            
-            // Update API status badges
-            updateStatusBadges(statusData);
         }
 
         function updateStatusIndicator(status, text) {
             statusIndicator.className = `status-dot ${status}`;
             statusText.textContent = text;
-        }
-
-        function updateStatusBadgesLoading() {
-            apiStatus.innerHTML = '';
-            addStatusBadge(false, 'Server', 'Connecting...', 'warning');
-            addStatusBadge(false, 'Data', 'Pending', 'warning');
-            addStatusBadge(false, 'Index', 'Pending', 'warning');
-        }
-
-        function updateStatusBadgesOffline() {
-            apiStatus.innerHTML = '';
-            addStatusBadge(false, 'Server', 'Offline', 'error');
-            addStatusBadge(false, 'Data', 'Unknown', 'error');
-            addStatusBadge(false, 'Index', 'Unknown', 'error');
-        }
-
-        function updateStatusBadges(statusData) {
-            apiStatus.innerHTML = '';
-            
-            // Server Status
-            addStatusBadge(
-                statusData.server_up,
-                'Server',
-                statusData.server_up ? 'Online' : 'Offline'
-            );
-            
-            // Data Status
-            if (statusData.data_loaded !== undefined) {
-                addStatusBadge(
-                    statusData.data_loaded,
-                    'Data',
-                    statusData.data_loaded ? 'Loaded' : 'Not loaded'
-                );
-            }
-            
-            // Index Status
-            if (statusData.index_ready !== undefined) {
-                addStatusBadge(
-                    statusData.index_ready,
-                    'Index',
-                    statusData.index_ready ? 'Ready' : 'Not ready'
-                );
-            }
-            
-            // Indexing Status
-            if (statusData.indexing_status && statusData.indexing_status.running) {
-                addStatusBadge(
-                    false,
-                    'Indexing',
-                    'In Progress',
-                    'warning'
-                );
-            }
-            
-            // Document Count
-            if (statusData.indexing_status && statusData.indexing_status.documents_count > 0) {
-                addStatusBadge(
-                    true,
-                    'Documents',
-                    statusData.indexing_status.documents_count.toString(),
-                    'success'
-                );
-            } else if (statusData.indexing_status) {
-                // If documents_count is 0 but we're connected, show as warning
-                addStatusBadge(
-                    false,
-                    'Documents',
-                    statusData.indexing_status.documents_count.toString(),
-                    'warning'
-                );
-            }
-        }
-        
-        function addStatusBadge(isSuccess, label, value, forceStatus = null) {
-            const status = forceStatus || (isSuccess ? 'success' : 'error');
-            const icon = status === 'success' ? 'check-circle' : 
-                        status === 'warning' ? 'exclamation-triangle' : 'times-circle';
-            
-            const badge = document.createElement('div');
-            badge.className = `status-badge ${status}`;
-            badge.innerHTML = `
-                <i class="fas fa-${icon}"></i>
-                <span>${label}: ${value}</span>
-            `;
-            apiStatus.appendChild(badge);
         }
 
         function sendMessage() {
@@ -1060,6 +1438,7 @@
             
             // Prepare request
             const endpoint = '/api/rag/ask';
+            const selectedPaths = getSelectedStoragePaths();
             
             fetch(endpoint, {
                 method: 'POST',
@@ -1068,10 +1447,12 @@
                 },
                 body: JSON.stringify({
                     question: questionText,
+                    sessionId: currentSessionId,
                     useAI: useAI,
                     from_date: fromDate || undefined,
                     to_date: toDate || undefined,
-                    correspondent: correspondentValue || undefined
+                    correspondent: correspondentValue || undefined,
+                    storagePaths: selectedPaths.length > 0 ? selectedPaths : undefined
                 })
             })
             .then(response => {
@@ -1083,6 +1464,13 @@
             .then(data => {
                 // Hide typing indicator
                 typingIndicator.classList.add('hidden');
+                
+                // Track session ID
+                if (data.sessionId) {
+                    currentSessionId = data.sessionId;
+                    const shareBtn = document.getElementById('share-btn');
+                    if (shareBtn) shareBtn.style.display = 'inline-flex';
+                }
                 
                 // Display answer with sources
                 addAssistantMessage(data.answer, data.sources, data.model);
@@ -1101,7 +1489,6 @@
                 // Update connection status if there was an error
                 isConnected = false;
                 updateStatusIndicator('offline', 'Offline');
-                updateStatusBadgesOffline();
                 
                 // Schedule an immediate status check
                 setTimeout(checkStatus, 1000);
@@ -1120,42 +1507,56 @@
             const messageElement = document.createElement('div');
             messageElement.className = 'message assistant';
             
-            // Format message with markdown
-            let formattedMessage = message.replace(/\n\n/g, '</p><p>').replace(/\n/g, '<br>');
-            if (!formattedMessage.startsWith('<p>')) formattedMessage = '<p>' + formattedMessage;
-            if (!formattedMessage.endsWith('</p>')) formattedMessage += '</p>';
+            // Format message with marked.js for proper markdown rendering
+            let formattedMessage = marked.parse(message);
             
-            let html = `<div class="markdown">${formattedMessage}</div>`;
+            let html = `<button class="copy-btn" title="Copy to clipboard"><i class="fas fa-copy"></i></button>`;
+            html += `<div class="markdown">${formattedMessage}</div>`;
             
-            // Add model info if available
-            if (modelUsed) {
-                html += `<div style="font-size: 0.75rem; margin-top: 0.5rem; color: var(--text-tertiary);">
-                            <i class="fas fa-robot"></i> Answered with ${modelUsed}
-                        </div>`;
-            }
-            
-            // Add sources if available
+            // Add sources if available — new card layout with thumbnails
             if (sources && sources.length > 0) {
                 html += `<div class="sources-container">
                             <div class="sources-title">
                                 <span>Sources (${sources.length})</span>
                                 <button class="sources-toggle" data-expanded="false">
-                                    Show all <i class="fas fa-chevron-down"></i>
+                                    Show <i class="fas fa-chevron-down"></i>
                                 </button>
                             </div>
                             <div class="sources-list">`;
                 
                 sources.forEach((source, index) => {
-                    const date = source.date ? new Date(source.date).toLocaleDateString('en-US') : 'Unknown';
-                    const hidden = index > 0 ? ' hidden' : '';
+                    const rawDate = source.date;
+                    let dateStr = 'Unknown';
+                    if (rawDate) {
+                        try {
+                            const d = new Date(rawDate);
+                            dateStr = d.toISOString().slice(0, 10); // yyyy-mm-dd
+                        } catch { dateStr = rawDate; }
+                    }
+                    const hidden = ' hidden';
+                    const docId = source.doc_id;
+                    const docLink = (paperlessUrl && docId)
+                        ? `${paperlessUrl}/documents/${docId}/details`
+                        : '#';
+                    const thumbUrl = docId ? `/api/documents/${docId}/thumb` : '';
                     
                     html += `
-                        <div class="source${hidden}" data-index="${index}">
-                            <div class="source-title">${source.title || 'Unknown Title'}</div>
-                            <p>${source.snippet || 'No excerpt available'}</p>
-                            <div class="source-meta">
-                                <span>${source.correspondent || 'Unknown Sender'}</span>
-                                <span>${date}</span>
+                        <div class="source-card${hidden}" data-index="${index}" data-doc-id="${docId || ''}">
+                            <div class="source-thumb" onclick="openDocViewer(${docId}, '${(source.title || '').replace(/'/g, "\\'")}')">
+                                ${thumbUrl
+                                    ? `<img src="${thumbUrl}" alt="Thumbnail" loading="lazy">`
+                                    : `<span class="thumb-placeholder"><i class="fas fa-file-alt"></i></span>`
+                                }
+                            </div>
+                            <div class="source-info" onclick="openDocViewer(${docId}, '${(source.title || '').replace(/'/g, "\\'")}')">
+                                <div class="source-info-title">${source.title || 'Unknown Title'}</div>
+                                <div class="source-info-meta">
+                                    <span><i class="fas fa-calendar-alt"></i> ${dateStr}</span>
+                                    <span><i class="fas fa-user"></i> ${source.correspondent || 'Unknown'}</span>
+                                </div>
+                            </div>
+                            <div class="source-actions">
+                                ${docLink !== '#' ? `<a href="${docLink}" target="_blank" rel="noopener noreferrer" class="source-action-btn" title="Open in Paperless"><i class="fas fa-external-link-alt"></i></a>` : ''}
                             </div>
                         </div>
                     `;
@@ -1165,26 +1566,45 @@
             }
             
             messageElement.innerHTML = html;
+            // Store raw text for copy
+            messageElement.dataset.rawText = message;
             chatContainer.appendChild(messageElement);
+            
+            // Add copy button event listener
+            const copyBtn = messageElement.querySelector('.copy-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await navigator.clipboard.writeText(messageElement.dataset.rawText);
+                        copyBtn.innerHTML = '<i class="fas fa-check"></i>';
+                        copyBtn.classList.add('copied');
+                        setTimeout(() => {
+                            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                            copyBtn.classList.remove('copied');
+                        }, 2000);
+                    } catch (err) {
+                        console.error('Copy failed:', err);
+                    }
+                });
+            }
             
             // Add event listener for sources toggle
             const toggleBtn = messageElement.querySelector('.sources-toggle');
             if (toggleBtn) {
-                toggleBtn.addEventListener('click', () => {
+                toggleBtn.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
                     const sourcesList = messageElement.querySelector('.sources-list');
-                    const sources = sourcesList.querySelectorAll('.source');
+                    const cards = sourcesList.querySelectorAll('.source-card');
                     const isExpanded = toggleBtn.getAttribute('data-expanded') === 'true';
                     
                     if (isExpanded) {
-                        // Collapse
-                        sources.forEach((source, index) => {
-                            if (index > 0) source.classList.add('hidden');
-                        });
-                        toggleBtn.innerHTML = 'Show all <i class="fas fa-chevron-down"></i>';
+                        cards.forEach(card => card.classList.add('hidden'));
+                        toggleBtn.innerHTML = 'Show <i class="fas fa-chevron-down"></i>';
                         toggleBtn.setAttribute('data-expanded', 'false');
                     } else {
-                        // Expand
-                        sources.forEach(source => source.classList.remove('hidden'));
+                        cards.forEach(card => card.classList.remove('hidden'));
                         toggleBtn.innerHTML = 'Hide <i class="fas fa-chevron-up"></i>';
                         toggleBtn.setAttribute('data-expanded', 'true');
                     }
@@ -1210,6 +1630,220 @@
         function scrollToBottom() {
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
+
+        // Chat History Functions
+        const historySidebar = document.getElementById('history-sidebar');
+        const historyToggle = document.getElementById('history-toggle');
+        const historyClose = document.getElementById('history-close');
+        const historyList = document.getElementById('history-list');
+        const newChatBtn = document.getElementById('new-chat-btn');
+
+        historyToggle.addEventListener('click', () => {
+            historySidebar.classList.toggle('open');
+            if (historySidebar.classList.contains('open')) {
+                loadHistorySessions();
+            }
+        });
+
+        historyClose.addEventListener('click', () => {
+            historySidebar.classList.remove('open');
+        });
+
+        newChatBtn.addEventListener('click', () => {
+            startNewChat();
+        });
+
+        function startNewChat() {
+            currentSessionId = null;
+            chatContainer.innerHTML = '<div class="system-message">Welcome to Paperless-AI RAG Chat! Ask a question about your documents.</div>';
+            // Remove active state from all history items
+            document.querySelectorAll('.history-item').forEach(el => el.classList.remove('active'));
+        }
+
+        async function loadHistorySessions() {
+            try {
+                const response = await fetch('/api/rag/history');
+                if (!response.ok) return;
+                const sessions = await response.json();
+                
+                historyList.innerHTML = '';
+                if (sessions.length === 0) {
+                    historyList.innerHTML = '<div style="text-align:center; color:var(--text-tertiary); padding:2rem; font-size:0.875rem;">No chat history yet</div>';
+                    return;
+                }
+
+                sessions.forEach(session => {
+                    const item = document.createElement('div');
+                    item.className = 'history-item' + (session.id === currentSessionId ? ' active' : '');
+                    item.dataset.sessionId = session.id;
+                    const date = new Date(session.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+                    item.innerHTML = `
+                        <button class="history-item-delete" title="Delete" data-id="${session.id}"><i class="fas fa-trash"></i></button>
+                        <div class="history-item-title">${session.title}</div>
+                        <div class="history-item-meta">${session.messageCount} messages &middot; ${date}</div>
+                    `;
+                    
+                    item.addEventListener('click', (e) => {
+                        if (e.target.closest('.history-item-delete')) return;
+                        loadSession(session.id);
+                    });
+                    
+                    const deleteBtn = item.querySelector('.history-item-delete');
+                    deleteBtn.addEventListener('click', async (e) => {
+                        e.stopPropagation();
+                        if (confirm('Delete this chat?')) {
+                            await fetch(`/api/rag/history/${session.id}`, { method: 'DELETE' });
+                            if (currentSessionId === session.id) {
+                                startNewChat();
+                            }
+                            loadHistorySessions();
+                        }
+                    });
+                    
+                    historyList.appendChild(item);
+                });
+            } catch (err) {
+                console.error('Error loading history:', err);
+            }
+        }
+
+        async function loadSession(sessionId) {
+            try {
+                const response = await fetch(`/api/rag/history/${sessionId}`);
+                if (!response.ok) return;
+                const session = await response.json();
+                
+                currentSessionId = sessionId;
+                chatContainer.innerHTML = '<div class="system-message">Welcome to Paperless-AI RAG Chat! Ask a question about your documents.</div>';
+                
+                // Replay messages
+                session.messages.forEach(msg => {
+                    if (msg.role === 'user') {
+                        addUserMessage(msg.content);
+                    } else if (msg.role === 'assistant') {
+                        addAssistantMessage(msg.content, msg.sources || []);
+                    }
+                });
+                
+                // Update active state in sidebar
+                document.querySelectorAll('.history-item').forEach(el => {
+                    el.classList.toggle('active', el.dataset.sessionId === sessionId);
+                });
+                
+                // Show share button now that a session is loaded
+                const shareBtn = document.getElementById('share-btn');
+                if (shareBtn) shareBtn.style.display = 'inline-flex';
+                
+                // Close sidebar on mobile
+                if (window.innerWidth < 768) {
+                    historySidebar.classList.remove('open');
+                }
+            } catch (err) {
+                console.error('Error loading session:', err);
+            }
+        }
+
+        // ── Document Viewer Popup ──
+        function openDocViewer(docId, title) {
+            if (!docId) return;
+            // Remove any existing overlay
+            closeDocViewer();
+            const overlay = document.createElement('div');
+            overlay.className = 'doc-viewer-overlay';
+            overlay.id = 'doc-viewer-overlay';
+            overlay.innerHTML = `
+                <div class="doc-viewer">
+                    <div class="doc-viewer-header">
+                        <span class="doc-viewer-title">${title || 'Document'}</span>
+                        <div class="doc-viewer-actions">
+                            <a href="/api/documents/${docId}/download" class="source-action-btn" title="Download"><i class="fas fa-download"></i></a>
+                            <button onclick="printDoc()" class="source-action-btn" title="Print"><i class="fas fa-print"></i></button>
+                            <button onclick="closeDocViewer()" class="source-action-btn" title="Close"><i class="fas fa-times"></i></button>
+                        </div>
+                    </div>
+                    <div class="doc-viewer-body">
+                        <iframe id="doc-viewer-iframe" src="/api/documents/${docId}/preview"></iframe>
+                    </div>
+                </div>
+            `;
+            overlay.addEventListener('click', (e) => {
+                if (e.target === overlay) closeDocViewer();
+            });
+            document.body.appendChild(overlay);
+            // Close on Escape
+            document.addEventListener('keydown', docViewerEscHandler);
+        }
+
+        function closeDocViewer() {
+            const overlay = document.getElementById('doc-viewer-overlay');
+            if (overlay) overlay.remove();
+            document.removeEventListener('keydown', docViewerEscHandler);
+        }
+
+        function docViewerEscHandler(e) {
+            if (e.key === 'Escape') closeDocViewer();
+        }
+
+        function printDoc() {
+            const iframe = document.getElementById('doc-viewer-iframe');
+            if (iframe && iframe.contentWindow) {
+                iframe.contentWindow.print();
+            }
+        }
+
+        // ── Share Button ──
+        (function initShareButton() {
+            const shareBtn = document.getElementById('share-btn');
+            if (!shareBtn) return;
+            shareBtn.addEventListener('click', async () => {
+                if (!currentSessionId) return;
+                try {
+                    const res = await fetch(`/api/rag/history/${currentSessionId}/share`, { method: 'POST' });
+                    if (!res.ok) throw new Error('Failed to create share link');
+                    const data = await res.json();
+                    await navigator.clipboard.writeText(data.shareUrl);
+                    showShareToast('Link copied to clipboard!');
+                } catch (err) {
+                    console.error('Share error:', err);
+                    showShareToast('Could not create share link', true);
+                }
+            });
+        })();
+
+        function showShareToast(msg, isError = false) {
+            let toast = document.querySelector('.share-toast');
+            if (!toast) {
+                toast = document.createElement('div');
+                toast.className = 'share-toast';
+                document.body.appendChild(toast);
+            }
+            toast.textContent = msg;
+            toast.style.background = isError ? '#dc3545' : 'var(--primary-color, #4f46e5)';
+            toast.classList.add('visible');
+            setTimeout(() => toast.classList.remove('visible'), 3000);
+        }
+
+        // ── Shared Session Loading ──
+        (function loadSharedSession() {
+            const sharedSession = <%- typeof sharedSession !== 'undefined' && sharedSession ? JSON.stringify(sharedSession) : 'null' %>;
+            const readOnly = <%= typeof readOnly !== 'undefined' && readOnly ? 'true' : 'false' %>;
+            if (!sharedSession) return;
+            // Render shared messages
+            chatContainer.innerHTML = '<div class="system-message">Shared conversation</div>';
+            if (sharedSession.messages) {
+                sharedSession.messages.forEach(msg => {
+                    if (msg.role === 'user') addUserMessage(msg.content);
+                    else if (msg.role === 'assistant') addAssistantMessage(msg.content, msg.sources || []);
+                });
+            }
+            // Hide input area in read-only mode
+            if (readOnly) {
+                const inputArea = document.querySelector('.input-container');
+                if (inputArea) inputArea.style.display = 'none';
+                const historyToggleBtn = document.getElementById('history-toggle');
+                if (historyToggleBtn) historyToggleBtn.style.display = 'none';
+            }
+        })();
     </script>
 </body>
 </html>

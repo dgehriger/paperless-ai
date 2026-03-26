@@ -374,7 +374,7 @@ class CustomOpenAIService {
    * @param {string} prompt - The prompt to generate text from
    * @returns {Promise<string>} - The generated text
    */
-  async generateText(prompt) {
+  async generateText(prompt, options = {}) {
     try {
       this.initialize();
 
@@ -382,7 +382,7 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized - missing API key');
       }
 
-      const model = config.custom.model;
+      const model = options.model || config.custom.model;
 
       const response = await this.client.chat.completions.create({
         model: model,

@@ -1,0 +1,521 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG Settings - Paperless-AI</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --primary-hover: #4f46e5;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --error-color: #ef4444;
+            --text-color: #1f2937;
+            --text-secondary: #4b5563;
+            --text-tertiary: #9ca3af;
+            --bg-color: #ffffff;
+            --bg-secondary: #f9fafb;
+            --bg-tertiary: #f3f4f6;
+            --border-color: #e5e7eb;
+            --shadow-color: rgba(0, 0, 0, 0.1);
+        }
+
+        [data-theme="dark"] {
+            --primary-color: #6366f1;
+            --primary-hover: #818cf8;
+            --success-color: #34d399;
+            --warning-color: #fbbf24;
+            --error-color: #f87171;
+            --text-color: #f9fafb;
+            --text-secondary: #e5e7eb;
+            --text-tertiary: #9ca3af;
+            --bg-color: #111827;
+            --bg-secondary: #1f2937;
+            --bg-tertiary: #374151;
+            --border-color: #374151;
+            --shadow-color: rgba(0, 0, 0, 0.5);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: background-color 0.3s ease, color 0.3s ease;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
+        }
+
+        header {
+            background-color: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            padding: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px var(--shadow-color);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            font-weight: 700;
+            font-size: 1.5rem;
+            color: var(--primary-color);
+        }
+
+        .logo i { margin-right: 0.5rem; }
+
+        .header-controls {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .back-button { margin-right: 1rem; }
+
+        .back-button a {
+            color: var(--primary-color);
+            font-size: 1.25rem;
+            transition: color 0.2s ease;
+            display: flex;
+            align-items: center;
+            text-decoration: none;
+        }
+
+        .back-button a:hover { color: var(--primary-hover); }
+
+        .theme-toggle {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.25rem;
+            color: var(--text-secondary);
+            transition: color 0.2s ease;
+        }
+
+        .theme-toggle:hover { color: var(--primary-color); }
+
+        main {
+            flex: 1;
+            max-width: 900px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 1.5rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .card {
+            padding: 1.25rem;
+            background-color: var(--bg-secondary);
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+        }
+
+        .card-title {
+            font-weight: 600;
+            font-size: 1rem;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .card-title i { color: var(--primary-color); }
+
+        .api-status {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+        }
+
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .status-badge.success {
+            background-color: rgba(16, 185, 129, 0.1);
+            color: var(--success-color);
+            border: 1px solid rgba(16, 185, 129, 0.2);
+        }
+
+        .status-badge.warning {
+            background-color: rgba(245, 158, 11, 0.1);
+            color: var(--warning-color);
+            border: 1px solid rgba(245, 158, 11, 0.2);
+        }
+
+        .status-badge.error {
+            background-color: rgba(239, 68, 68, 0.1);
+            color: var(--error-color);
+            border: 1px solid rgba(239, 68, 68, 0.2);
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            flex-wrap: wrap;
+        }
+
+        .btn {
+            padding: 0.5rem 0.75rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+            border: none;
+        }
+
+        .btn-primary:hover { background-color: var(--primary-hover); }
+
+        .btn-outline {
+            background-color: transparent;
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+        }
+
+        .btn-outline:hover { background-color: var(--bg-tertiary); }
+
+        .btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .prompt-area {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid var(--border-color);
+            border-radius: 0.25rem;
+            background-color: var(--bg-tertiary);
+            color: var(--text-color);
+            font-size: 0.85rem;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .prompt-area:focus {
+            border-color: var(--primary-color);
+            outline: none;
+        }
+
+        .prompt-hint {
+            font-size: 0.8rem;
+            color: var(--text-tertiary);
+            margin-top: 0.5rem;
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 1.5rem;
+            right: 1.5rem;
+            padding: 0.75rem 1.25rem;
+            border-radius: 0.5rem;
+            color: white;
+            font-size: 0.875rem;
+            z-index: 1000;
+            opacity: 0;
+            transform: translateY(10px);
+            transition: opacity 0.3s, transform 0.3s;
+        }
+
+        .toast.show {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .toast.success { background-color: var(--success-color); }
+        .toast.error { background-color: var(--error-color); }
+
+        .hidden { display: none; }
+
+        footer {
+            text-align: center;
+            padding: 1rem;
+            font-size: 0.875rem;
+            color: var(--text-tertiary);
+            background-color: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="back-button">
+            <a href="/rag" title="Back to RAG Chat">
+                <i class="fas fa-arrow-left"></i>
+            </a>
+        </div>
+        <div class="logo">
+            <i class="fas fa-cog"></i>
+            RAG Settings
+        </div>
+        <div class="header-controls">
+            <button class="theme-toggle" id="theme-toggle">
+                <i class="fas fa-moon"></i>
+            </button>
+        </div>
+    </header>
+
+    <main>
+        <!-- API Status -->
+        <div class="card">
+            <div class="card-title"><i class="fas fa-server"></i> Service Status</div>
+            <div class="api-status" id="api-status">
+                <!-- Badges loaded dynamically -->
+            </div>
+            <div class="action-buttons">
+                <button class="btn btn-outline" id="check-updates-btn">
+                    <i class="fas fa-sync-alt"></i> Check for Updates
+                </button>
+                <button class="btn btn-primary" id="start-indexing-btn">
+                    <i class="fas fa-database"></i> Index New
+                </button>
+                <button class="btn btn-outline" id="force-reindex-btn" style="color: var(--warning-color); border-color: var(--warning-color);">
+                    <i class="fas fa-redo"></i> Force Re-index
+                </button>
+            </div>
+        </div>
+
+        <!-- System Prompt -->
+        <div class="card">
+            <div class="card-title"><i class="fas fa-comment-dots"></i> System Prompt</div>
+            <textarea id="system-prompt-input" class="prompt-area" rows="8"
+                placeholder="Custom system instruction for the RAG assistant (leave empty for default)"></textarea>
+            <p class="prompt-hint">This prompt is prepended to every RAG query to steer the assistant's behaviour. Leave empty to use the built-in default.</p>
+            <div class="action-buttons">
+                <button class="btn btn-outline" id="load-default-btn">
+                    <i class="fas fa-undo"></i> Load Default
+                </button>
+                <button class="btn btn-primary" id="save-prompt-btn">
+                    <i class="fas fa-save"></i> Save
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast"></div>
+
+    <footer>
+        &copy; 2025 Paperless-AI - RAG Settings
+    </footer>
+
+    <script>
+        // Theme
+        let darkMode = localStorage.getItem('darkMode') === 'true';
+        const themeToggle = document.getElementById('theme-toggle');
+
+        function updateTheme() {
+            if (darkMode) {
+                document.documentElement.setAttribute('data-theme', 'dark');
+                themeToggle.innerHTML = '<i class="fas fa-sun"></i>';
+            } else {
+                document.documentElement.removeAttribute('data-theme');
+                themeToggle.innerHTML = '<i class="fas fa-moon"></i>';
+            }
+        }
+
+        themeToggle.addEventListener('click', () => {
+            darkMode = !darkMode;
+            localStorage.setItem('darkMode', darkMode);
+            updateTheme();
+        });
+
+        updateTheme();
+
+        // Toast helper
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type} show`;
+            setTimeout(() => { toast.classList.remove('show'); }, 3000);
+        }
+
+        // --- API Status ---
+        const apiStatus = document.getElementById('api-status');
+
+        function addStatusBadge(isSuccess, label, value, forceStatus = null) {
+            const status = forceStatus || (isSuccess ? 'success' : 'error');
+            const icon = status === 'success' ? 'check-circle' :
+                        status === 'warning' ? 'exclamation-triangle' : 'times-circle';
+            const badge = document.createElement('div');
+            badge.className = `status-badge ${status}`;
+            badge.innerHTML = `<i class="fas fa-${icon}"></i><span>${label}: ${value}</span>`;
+            apiStatus.appendChild(badge);
+        }
+
+        function updateStatusBadges(data) {
+            apiStatus.innerHTML = '';
+            addStatusBadge(data.server_up, 'Server', data.server_up ? 'Online' : 'Offline');
+            if (data.data_loaded !== undefined) addStatusBadge(data.data_loaded, 'Data', data.data_loaded ? 'Loaded' : 'Not loaded');
+            if (data.index_ready !== undefined) addStatusBadge(data.index_ready, 'Index', data.index_ready ? 'Ready' : 'Not ready');
+            if (data.indexing_status && data.indexing_status.running) addStatusBadge(false, 'Indexing', 'In Progress', 'warning');
+            if (data.indexing_status && data.indexing_status.documents_count != null) {
+                const c = data.indexing_status.documents_count;
+                addStatusBadge(c > 0, 'Documents', c.toString(), c > 0 ? 'success' : 'warning');
+            }
+            if (data.ai_status === 'ok' && data.ai_model) addStatusBadge(true, 'AI Model', data.ai_model, 'success');
+        }
+
+        function setStatusLoading() {
+            apiStatus.innerHTML = '';
+            addStatusBadge(false, 'Server', 'Connecting...', 'warning');
+        }
+
+        function setStatusOffline() {
+            apiStatus.innerHTML = '';
+            addStatusBadge(false, 'Server', 'Offline', 'error');
+        }
+
+        async function checkStatus() {
+            try {
+                const resp = await fetch('/api/rag/status');
+                if (resp.ok) { updateStatusBadges(await resp.json()); }
+                else { setStatusOffline(); }
+            } catch { setStatusOffline(); }
+        }
+
+        setStatusLoading();
+        checkStatus();
+        setInterval(checkStatus, 10000);
+
+        // --- Indexing buttons ---
+        const checkUpdatesBtn = document.getElementById('check-updates-btn');
+        const startIndexingBtn = document.getElementById('start-indexing-btn');
+        const forceReindexBtn = document.getElementById('force-reindex-btn');
+
+        checkUpdatesBtn.addEventListener('click', async () => {
+            checkUpdatesBtn.disabled = true;
+            checkUpdatesBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+            try {
+                const resp = await fetch('/api/rag/index/check');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    showToast(data.message || 'Check complete');
+                } else { showToast('Error checking status', 'error'); }
+            } catch (e) { showToast(`Connection error: ${e.message}`, 'error'); }
+            finally {
+                checkUpdatesBtn.disabled = false;
+                checkUpdatesBtn.innerHTML = '<i class="fas fa-sync-alt"></i> Check for Updates';
+            }
+        });
+
+        startIndexingBtn.addEventListener('click', async () => {
+            startIndexingBtn.disabled = true;
+            startIndexingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
+            try {
+                const resp = await fetch('/api/rag/index', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: false, background: true })
+                });
+                if (resp.ok) {
+                    showToast('Indexing started');
+                    checkStatus();
+                } else { showToast('Error starting indexing', 'error'); }
+            } catch (e) { showToast(`Connection error: ${e.message}`, 'error'); }
+            finally {
+                startIndexingBtn.disabled = false;
+                startIndexingBtn.innerHTML = '<i class="fas fa-database"></i> Index New';
+            }
+        });
+
+        forceReindexBtn.addEventListener('click', async () => {
+            if (!confirm('Force re-index will rebuild the entire search index. This may take a while. Continue?')) return;
+            forceReindexBtn.disabled = true;
+            forceReindexBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Re-indexing...';
+            try {
+                const resp = await fetch('/api/rag/index', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ force: true, background: true })
+                });
+                if (resp.ok) {
+                    showToast('Force re-index started');
+                    checkStatus();
+                } else { showToast('Error starting re-index', 'error'); }
+            } catch (e) { showToast(`Connection error: ${e.message}`, 'error'); }
+            finally {
+                forceReindexBtn.disabled = false;
+                forceReindexBtn.innerHTML = '<i class="fas fa-redo"></i> Force Re-index';
+            }
+        });
+
+        // --- System Prompt ---
+        const promptInput = document.getElementById('system-prompt-input');
+        const savePromptBtn = document.getElementById('save-prompt-btn');
+        const loadDefaultBtn = document.getElementById('load-default-btn');
+
+        // Load current prompt
+        (async () => {
+            try {
+                const resp = await fetch('/api/rag/system-prompt');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    promptInput.value = data.prompt || '';
+                }
+            } catch { /* ignore */ }
+        })();
+
+        savePromptBtn.addEventListener('click', async () => {
+            savePromptBtn.disabled = true;
+            savePromptBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving...';
+            try {
+                const resp = await fetch('/api/rag/system-prompt', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: promptInput.value })
+                });
+                if (resp.ok) { showToast('System prompt saved'); }
+                else { showToast('Error saving system prompt', 'error'); }
+            } catch (e) { showToast(`Error: ${e.message}`, 'error'); }
+            finally {
+                savePromptBtn.disabled = false;
+                savePromptBtn.innerHTML = '<i class="fas fa-save"></i> Save';
+            }
+        });
+
+        loadDefaultBtn.addEventListener('click', async () => {
+            loadDefaultBtn.disabled = true;
+            loadDefaultBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+            try {
+                const resp = await fetch('/api/rag/default-prompt');
+                if (resp.ok) {
+                    const data = await resp.json();
+                    promptInput.value = data.prompt;
+                    showToast('Default prompt loaded — click Save to apply');
+                } else { showToast('Error fetching default prompt', 'error'); }
+            } catch (e) { showToast(`Error: ${e.message}`, 'error'); }
+            finally {
+                loadDefaultBtn.disabled = false;
+                loadDefaultBtn.innerHTML = '<i class="fas fa-undo"></i> Load Default';
+            }
+        });
+    </script>
+</body>
+</html>

@@ -16,8 +16,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
 from tqdm import tqdm
-import torch
-from sentence_transformers import SentenceTransformer, CrossEncoder
 import chromadb
 from chromadb.utils import embedding_functions
 from rank_bm25 import BM25Okapi
@@ -58,12 +56,15 @@ DOCUMENTS_FILE = "./data/documents.json"
 CHROMADB_DIR = "./data/chromadb"
 BM25_FILE = "./data/bm25_index.pkl"
 STATE_FILE = "./data/system_state.json"
-EMBEDDING_MODEL_NAME = "paraphrase-multilingual-MiniLM-L12-v2"
-CROSS_ENCODER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 COLLECTION_NAME = "documents"
 BM25_WEIGHT = 0.3
 SEMANTIC_WEIGHT = 0.7
-MAX_RESULTS = 20
+MAX_RESULTS = int(os.getenv("RAG_MAX_RESULTS", "20"))
+
+# External embeddings API configuration
+RAG_EMBEDDINGS_API_URL = os.getenv("RAG_EMBEDDINGS_API_URL") or os.getenv("CUSTOM_BASE_URL", "https://openrouter.ai/api/v1")
+RAG_EMBEDDINGS_API_KEY = os.getenv("RAG_EMBEDDINGS_API_KEY") or os.getenv("CUSTOM_API_KEY", "")
+RAG_EMBEDDINGS_MODEL = os.getenv("RAG_EMBEDDINGS_MODEL", "text-embedding-3-small")
 
 # Download NLTK resources if not present
 nltk.download('punkt', quiet=True)
@@ -92,6 +93,7 @@ class SearchRequest(BaseModel):
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     correspondent: Optional[str] = None
+    storage_paths: Optional[List[str]] = None
 
 class IndexingRequest(BaseModel):
     force: bool = False
@@ -100,6 +102,7 @@ class IndexingRequest(BaseModel):
 class AskQuestionRequest(BaseModel):
     question: str
     max_sources: int = 5
+    storage_paths: Optional[List[str]] = None
 
 # Response models
 class SearchResult(BaseModel):
@@ -110,6 +113,8 @@ class SearchResult(BaseModel):
     cross_score: float
     snippet: str
     doc_id: Optional[int] = None
+    tags: Optional[str] = ""
+    storage_path: Optional[str] = ""
 
 # Global state object
 class GlobalState:
@@ -231,10 +236,8 @@ class DataManager:
         self.is_initialized = False
         self.chroma_initialized = False
         
-        # Modelle nur initialisieren, wenn sie benötigt werden
-        self.sentence_transformer = None
+        # External API-based embedding function (no local models needed)
         self.embedding_function = None
-        self.cross_encoder = None
         self.chroma_client = None
         
         # Add tracking for indexed documents
@@ -246,21 +249,17 @@ class DataManager:
             self.initialize_models()
     
     def initialize_models(self):
-        """Initialisiere NLP-Modelle und ChromaDB"""
+        """Initialize ChromaDB and external embedding function (no local models needed)"""
         try:
-            if self.sentence_transformer is None:
-                logger.info("Initializing sentence transformer model")
-                self.sentence_transformer = SentenceTransformer(EMBEDDING_MODEL_NAME)
-                
             if self.embedding_function is None:
-                logger.info("Initializing embedding function")
-                self.embedding_function = embedding_functions.SentenceTransformerEmbeddingFunction(
-                    model_name=EMBEDDING_MODEL_NAME
+                logger.info(f"Initializing external embedding function: model={RAG_EMBEDDINGS_MODEL}, api_url={RAG_EMBEDDINGS_API_URL}")
+                # Use OpenAI-compatible embedding function with custom base URL
+                api_base = RAG_EMBEDDINGS_API_URL.rstrip('/')
+                self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
+                    api_key=RAG_EMBEDDINGS_API_KEY,
+                    api_base=api_base,
+                    model_name=RAG_EMBEDDINGS_MODEL
                 )
-                
-            if self.cross_encoder is None:
-                logger.info("Initializing cross-encoder model")
-                self.cross_encoder = CrossEncoder(CROSS_ENCODER_MODEL_NAME)
                 
             if self.chroma_client is None:
                 logger.info("Initializing ChromaDB client")
@@ -415,6 +414,20 @@ class DataManager:
                     if tag_response.status_code == 200:
                         tags.append(tag_response.json().get("name", ""))
             
+            # Get storage path name
+            storage_path = ""
+            if doc.get("storage_path"):
+                try:
+                    sp_response = requests.get(
+                        f"{self.paperless_url}/api/storage_paths/{doc['storage_path']}/",
+                        headers=self._get_headers(),
+                        timeout=10
+                    )
+                    if sp_response.status_code == 200:
+                        storage_path = sp_response.json().get("name", "")
+                except Exception:
+                    pass
+            
             # Create processed document
             processed_doc = {
                 "id": doc.get("id"),
@@ -423,6 +436,7 @@ class DataManager:
                 "correspondent": correspondent,
                 "created": doc.get("created_date", doc.get("created", "")),
                 "tags": tags,
+                "storage_path": storage_path,
                 "last_updated": doc.get("modified", "")
             }
             
@@ -651,42 +665,62 @@ class DataManager:
             
             raise
     
+    # Max characters per document for embedding input.
+    # text-embedding-3-small uses 8191 tokens. For dense numeric content
+    # (e.g. bank statements), a single char can use multiple tokens, so
+    # 8K chars may already exceed the token limit. OpenRouter does not
+    # truncate and instead returns empty data. We start conservative and
+    # retry with less text on failure.
+    MAX_EMBEDDING_CHARS = 10000
+
     def _add_documents_to_chroma(self, collection, documents):
         """Add documents to ChromaDB collection"""
-        # We process in batches to avoid memory issues
-        batch_size = 100
+        batch_size = 20
         total_docs = len(documents)
         
         for i in range(0, total_docs, batch_size):
             batch = documents[i:i+batch_size]
-            logger.info(f"Processing batch {i//batch_size + 1}/{(total_docs-1)//batch_size + 1} ({len(batch)} documents)")
+            batch_num = i // batch_size + 1
+            total_batches = (total_docs - 1) // batch_size + 1
+            logger.info(f"Processing batch {batch_num}/{total_batches} ({len(batch)} documents)")
             
             ids = [str(doc["id"]) for doc in batch]
-            
-            # Prepare texts for embedding
             texts = [
-                f"{doc['title']} {doc['correspondent']} {doc['content']}"
+                f"{doc['title']} {doc['correspondent']} {doc['content']}"[:self.MAX_EMBEDDING_CHARS]
                 for doc in batch
             ]
-            
-            # Prepare metadata
             metadatas = [
                 {
                     "title": doc["title"],
                     "correspondent": doc["correspondent"],
                     "created": doc["created"],
                     "tags": ", ".join(doc["tags"]),
+                    "storage_path": doc.get("storage_path", ""),
                     "hash": doc["hash"]
                 }
                 for doc in batch
             ]
             
-            # Add or update documents in collection
-            collection.upsert(
-                ids=ids,
-                documents=texts,
-                metadatas=metadatas
-            )
+            try:
+                collection.upsert(ids=ids, documents=texts, metadatas=metadatas)
+            except ValueError:
+                # Batch failed — fall back to one-at-a-time with progressive truncation
+                logger.warning(f"Batch {batch_num} failed, falling back to individual upserts")
+                for j in range(len(ids)):
+                    text = texts[j]
+                    for attempt, limit in enumerate([self.MAX_EMBEDDING_CHARS, 5000, 2000]):
+                        try:
+                            collection.upsert(
+                                ids=[ids[j]],
+                                documents=[text[:limit]],
+                                metadatas=[metadatas[j]]
+                            )
+                            break
+                        except ValueError:
+                            if attempt < 2:
+                                logger.warning(f"Doc {ids[j]} failed at {limit} chars, retrying shorter")
+                            else:
+                                logger.error(f"Doc {ids[j]} failed even at {limit} chars, skipping")
         
         logger.info(f"Added/updated {total_docs} documents to ChromaDB collection")
 
@@ -1023,7 +1057,9 @@ class SearchEngine:
                         "correspondent": doc["correspondent"],
                         "date": doc["created"],
                         "score": float(score),
-                        "content": doc["content"]
+                        "content": doc["content"],
+                        "tags": ", ".join(doc.get("tags", [])),
+                        "storage_path": doc.get("storage_path", "")
                     })
                 except IndexError as e:
                     logger.error(f"Document index out of range: {i} (max: {len(self.documents)-1})")
@@ -1072,7 +1108,9 @@ class SearchEngine:
                             "correspondent": doc["correspondent"],
                             "date": doc["created"],
                             "score": float(distance) if isinstance(distance, (int, float)) else 1.0,
-                            "content": doc["content"]
+                            "content": doc["content"],
+                            "tags": ", ".join(doc.get("tags", [])),
+                            "storage_path": doc.get("storage_path", "")
                         })
                 except Exception as e:
                     logger.error(f"Error processing document with ID {doc_id}: {str(e)}")
@@ -1172,59 +1210,27 @@ class SearchEngine:
         return combined_results[:top_k]
     
     def rerank_results(self, query, results, top_k=MAX_RESULTS):
-        """Rerank results using cross-encoder"""
-        # More defensive check
+        """Rerank results — uses hybrid score directly (no local cross-encoder needed)"""
         if not results or len(results) == 0:
             logger.warning("No results to rerank")
             return []
             
         try:
-            # Prepare pairs for cross-encoder
-            pairs = [(query, f"{result['title']} {result['content'][:500]}" if 'content' in result and result['content'] else result.get('title', '')) 
-                    for result in results]
+            # Without a local cross-encoder, use the hybrid search score directly
+            # The hybrid score already combines BM25 (keyword) and semantic (embedding) scores
+            for result in results:
+                result["cross_score"] = result.get("score", 0.5)
             
-            # Make sure we have valid pairs
-            if not pairs:
-                logger.warning("No valid pairs to rerank")
-                return results  # Return original results without reranking
-                
-            # Get cross-encoder scores
-            cross_scores = self.data_manager.cross_encoder.predict(pairs)
-            
-            # Make sure we got valid scores
-            if not isinstance(cross_scores, np.ndarray) or len(cross_scores) != len(results):
-                logger.error(f"Invalid cross-encoder scores: got {len(cross_scores) if hasattr(cross_scores, '__len__') else 'invalid'} scores for {len(results)} results")
-                for result in results:
-                    result["cross_score"] = 0.5  # Default score
-                return results  # Return original results with default scores
-                
-            # Add cross-encoder scores to results
-            for i, score in enumerate(cross_scores):
-                if i < len(results):  # Make sure we don't go out of bounds
-                    # Convert score to a positive value by taking the sigmoid 
-                    # This maps any score to a value between 0 and 1
-                    # For cross-encoders, higher should be better matches
-                    norm_score = 1.0 / (1.0 + np.exp(-score))
-                    results[i]["cross_score"] = float(norm_score)
-            
-            # Fill in any missing scores
-            for i in range(len(results)):
-                if "cross_score" not in results[i]:
-                    results[i]["cross_score"] = 0.5  # Default score
-            
-            # Sort by cross-encoder score
-            results.sort(key=lambda x: x["cross_score"], reverse=True)
-            
-            logger.info(f"Reranked {len(results)} results")
+            # Already sorted by hybrid score from hybrid_search()
+            logger.info(f"Scored {len(results)} results using hybrid search scores")
             return results[:top_k]
             
         except Exception as e:
-            logger.error(f"Error reranking results: {str(e)}")
+            logger.error(f"Error scoring results: {str(e)}")
             logger.error(traceback.format_exc())
             
-            # Add default cross scores and return the original results
             for result in results:
-                result["cross_score"] = 0.5  # Default score
+                result["cross_score"] = 0.5
             
             return results[:top_k]
     
@@ -1293,7 +1299,7 @@ class SearchEngine:
                 return []
                 
             # Apply filters
-            if request.from_date or request.to_date or request.correspondent:
+            if request.from_date or request.to_date or request.correspondent or request.storage_paths:
                 filtered_results = []
                 for result in results:
                     include = True
@@ -1318,6 +1324,12 @@ class SearchEngine:
                     # Filter by correspondent
                     if request.correspondent and result["correspondent"]:
                         if request.correspondent.lower() not in result["correspondent"].lower():
+                            include = False
+                    
+                    # Filter by storage paths
+                    if request.storage_paths:
+                        doc_sp = result.get("storage_path", "")
+                        if not doc_sp or doc_sp not in request.storage_paths:
                             include = False
                     
                     if include:
@@ -1346,7 +1358,9 @@ class SearchEngine:
                         score=result["score"],
                         cross_score=result.get("cross_score", 0.5),
                         snippet=snippet,
-                        doc_id=result["id"]
+                        doc_id=result["id"],
+                        tags=result.get("tags", ""),
+                        storage_path=result.get("storage_path", "")
                     ))
                 except Exception as item_e:
                     logger.error(f"Error formatting search result: {str(item_e)}")
@@ -1729,7 +1743,10 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
             search_engine.initialize(force_update=False)
         
         # Search for relevant documents
-        search_results = search_engine.search(SearchRequest(query=request.question))
+        search_req = SearchRequest(query=request.question)
+        if request.storage_paths:
+            search_req.storage_paths = request.storage_paths
+        search_results = search_engine.search(search_req)
         
         # Check if we got any results
         if not search_results or len(search_results) == 0:
@@ -1759,7 +1776,9 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
                 "correspondent": result.correspondent,
                 "date": result.date,
                 "snippet": result.snippet,
-                "doc_id": result.doc_id
+                "doc_id": result.doc_id,
+                "tags": result.tags or "",
+                "storage_path": result.storage_path or ""
             })
         
         return {
@@ -1770,6 +1789,21 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
     except Exception as e:
         logger.error(f"Context error: {str(e)}")
         logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/storage-paths")
+async def get_storage_paths():
+    """Get list of unique storage paths from indexed documents"""
+    try:
+        paths = set()
+        if global_state.data_manager and global_state.data_manager.documents:
+            for doc in global_state.data_manager.documents:
+                sp = doc.get("storage_path", "")
+                if sp:
+                    paths.add(sp)
+        return sorted(paths)
+    except Exception as e:
+        logger.error(f"Error getting storage paths: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/status", response_model=dict)

@@ -681,7 +681,7 @@ class OllamaService {
      * @param {string} prompt - The prompt to generate text from
      * @returns {Promise<string>} - The generated text
      */
-    async generateText(prompt) {
+    async generateText(prompt, options = {}) {
         try {
             // Calculate context window size based on prompt length
             const promptTokenCount = this._calculatePromptTokenCount(prompt);
@@ -692,7 +692,7 @@ class OllamaService {
 
             // Call Ollama API without enforcing a specific response format
             const response = await this.client.post(`${this.apiUrl}/api/generate`, {
-                model: this.model,
+                model: options.model || this.model,
                 prompt: prompt,
                 system: systemPrompt,
                 stream: false,

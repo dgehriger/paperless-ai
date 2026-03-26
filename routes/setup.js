@@ -17,7 +17,9 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
-const { authenticateJWT, isAuthenticated } = require('./auth.js');
+const { authenticateJWT: legacyAuthenticateJWT, isAuthenticated: legacyIsAuthenticated } = require('./auth.js');
+const { authenticateJWT, isAuthenticated, AUTH_MODE, requirePermission, requireAdmin, getCfUser } = require('../middleware/cfAuth.js');
+const userModel = require('../models/userModel.js');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const customService = require('../services/customService.js');
 const config = require('../config/config.js');
@@ -139,34 +141,50 @@ let PUBLIC_ROUTES = [
   '/health',
   '/login',
   '/logout',
-  '/setup'
+  '/setup',
+  '/pending-approval',
+  '/shared/',
 ];
 
 // Combined middleware to check authentication and setup
 router.use(async (req, res, next) => {
-  const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
-  const apiKey = req.headers['x-api-key'];
-
   // Public route check
   if (PUBLIC_ROUTES.some(route => req.path.startsWith(route))) {
     return next();
   }
 
-  // API key authentication
-  if (apiKey && apiKey === process.env.API_KEY) {
-    req.user = { apiKey: true };
-  } else {
-    // Fallback to JWT authentication
-    if (!token) {
-      return res.redirect('/login');
+  // CF Access mode: trust CF headers
+  if (AUTH_MODE === 'cf_access') {
+    const user = getCfUser(req);
+    if (!user) {
+      return res.status(401).send('Cloudflare Access authentication required.');
     }
+    if (!user.is_approved && !user.is_admin && !req.path.startsWith('/pending-approval')) {
+      return res.redirect('/pending-approval');
+    }
+    req.cfUser = user;
+    req.user = { id: user.id, email: user.email, cfAccess: true };
+  } else {
+    // Legacy local auth mode
+    const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
+    const apiKey = req.headers['x-api-key'];
 
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.user = decoded;
-    } catch (error) {
-      res.clearCookie('jwt');
-      return res.redirect('/login');
+    // API key authentication
+    if (apiKey && apiKey === process.env.API_KEY) {
+      req.user = { apiKey: true };
+    } else {
+      // Fallback to JWT authentication
+      if (!token) {
+        return res.redirect('/login');
+      }
+
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+      } catch (error) {
+        res.clearCookie('jwt');
+        return res.redirect('/login');
+      }
     }
   }
 
@@ -189,6 +207,13 @@ router.use(async (req, res, next) => {
 
 // Protected route middleware for API endpoints
 const protectApiRoute = (req, res, next) => {
+  // CF Access mode: already authenticated by main middleware
+  if (AUTH_MODE === 'cf_access') {
+    if (req.cfUser) return next();
+    return res.status(401).json({ message: 'Authentication required' });
+  }
+
+  // Legacy local auth
   const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
   
   if (!token) {
@@ -242,6 +267,10 @@ const protectApiRoute = (req, res, next) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/login', (req, res) => {
+  // CF Access mode: no login page needed
+  if (AUTH_MODE === 'cf_access') {
+    return res.redirect('/dashboard');
+  }
   //check if a user exists beforehand
   documentModel.getUsers().then((users) => {
     if(users.length === 0) {
@@ -412,6 +441,43 @@ router.post('/login', async (req, res) => {
 router.get('/logout', (req, res) => {
   res.clearCookie('jwt');
   res.redirect('/login');
+});
+
+// Pending approval page (CF Access mode)
+router.get('/pending-approval', (req, res) => {
+  if (AUTH_MODE !== 'cf_access') return res.redirect('/login');
+  const user = getCfUser(req);
+  const email = user ? user.email : 'unknown';
+  if (user && (user.is_approved || user.is_admin)) {
+    return res.redirect('/dashboard');
+  }
+  res.render('pending-approval', { email });
+});
+
+// Admin panel (CF Access mode)
+router.get('/admin', requireAdmin, (req, res) => {
+  res.render('admin', { title: 'Admin Panel' });
+});
+
+// Current user info endpoint (for frontend)
+router.get('/api/me', (req, res) => {
+  if (AUTH_MODE === 'cf_access' && req.cfUser) {
+    const user = req.cfUser;
+    return res.json({
+      authMode: 'cf_access',
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      isAdmin: !!user.is_admin,
+      permissions: user.permissions || [],
+    });
+  }
+  // Local mode: basic info
+  res.json({
+    authMode: 'local',
+    isAdmin: true,
+    permissions: userModel.ALL_PERMISSIONS,
+  });
 });
 
 /**

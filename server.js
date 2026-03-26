@@ -434,21 +434,70 @@ async function scanDocuments() {
 app.use('/', setupRoutes);
 const authRoutes = require('./routes/auth');
 const ragRoutes = require('./routes/rag');
+const adminRoutes = require('./routes/admin');
+const proxyRoutes = require('./routes/proxy');
+const { authenticateJWT, isAuthenticated, requirePermission, AUTH_MODE } = require('./middleware/cfAuth');
+
+// Mount admin routes (CF Access mode)
+app.use('/api/admin', adminRoutes);
+
+// Mount document proxy routes (for thumbnails, previews, downloads)
+app.use('/api/documents', proxyRoutes);
 
 // Mount RAG routes if enabled
 if (process.env.RAG_SERVICE_ENABLED === 'true') {
   app.use('/api/rag', ragRoutes);
   
+  const userModel = require('./models/userModel');
+  const chatHistoryService = require('./services/chatHistoryService');
+
+  // Shared conversation view (public, token-based access)
+  app.get('/shared/:token', async (req, res) => {
+    try {
+      const tokenData = userModel.getShareToken(req.params.token);
+      if (!tokenData) {
+        return res.status(404).send('Share link expired or not found.');
+      }
+      const session = await chatHistoryService.getSession(tokenData.session_id);
+      if (!session) {
+        return res.status(404).send('Conversation not found.');
+      }
+      const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace(/\/api\/?$/, '');
+      const paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || paperlessUrl;
+      res.render('rag', {
+        title: session.title || 'Shared Conversation',
+        paperlessUrl: paperlessPublicUrl,
+        sharedSession: JSON.stringify(session),
+        readOnly: true,
+        authMode: AUTH_MODE,
+      });
+    } catch (error) {
+      console.error('Error loading shared conversation:', error);
+      res.status(500).send('Error loading shared conversation');
+    }
+  });
+
   // RAG UI route
   app.get('/rag', async (req, res) => {
     try {
+      const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace(/\/api\/?$/, '');
+      const paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || paperlessUrl;
       res.render('rag', { 
-        title: 'Dokumenten-Fragen'
+        title: 'Dokumenten-Fragen',
+        paperlessUrl: paperlessPublicUrl,
+        sharedSession: null,
+        readOnly: false,
+        authMode: AUTH_MODE,
       });
     } catch (error) {
       console.error('Error rendering RAG UI:', error);
       res.status(500).send('Error loading RAG interface');
     }
+  });
+
+  // RAG Settings page
+  app.get('/rag/settings', (req, res) => {
+    res.render('rag-settings', { title: 'RAG Settings' });
   });
 }
 

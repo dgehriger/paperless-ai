@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pending Approval - Paperless-AI</title>
+    <script src="https://cdn.tailwindcss.com/3.4.16"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <link rel="stylesheet" href="/css/dashboard.css">
+</head>
+<body class="h-full bg-secondary">
+    <div class="min-h-screen flex items-center justify-center px-4 sm:px-6 lg:px-8">
+        <div class="material-card w-full max-w-md text-center">
+            <div class="flex flex-col items-center gap-4 mb-6">
+                <img src="/favicon.ico" class="no-invert" alt="Paperless AI Logo" style="height: 60px;">
+                <h1 class="brand-title text-2xl">Paperless-AI</h1>
+            </div>
+            <div class="mb-6">
+                <div class="inline-flex items-center justify-center w-16 h-16 rounded-full bg-yellow-100 mb-4">
+                    <i class="fas fa-clock text-yellow-600 text-2xl"></i>
+                </div>
+                <h2 class="text-xl font-bold mb-2">Account Pending Approval</h2>
+                <p class="text-gray-600">
+                    Your account has been created but is awaiting admin approval.
+                    You will be able to access Paperless-AI once an administrator approves your account.
+                </p>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-4 text-sm text-gray-500">
+                <p>Signed in as: <strong><%= email %></strong></p>
+            </div>
+            <div class="mt-4">
+                <a href="/pending-approval" class="text-blue-600 hover:text-blue-700 text-sm">
+                    <i class="fas fa-sync-alt mr-1"></i> Refresh status
+                </a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

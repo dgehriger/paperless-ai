@@ -14,7 +14,7 @@ It enables **fully automated document workflows**, **contextual chat**, and **po
 > 💡 Just ask:  
 > “When did I sign my rental agreement?”  
 > “What was the amount of the last electricity bill?”  
-> “Which documents mention my health insurance?”  
+> “Which documents mention my health insurance?”
 
 Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantically across your full archive and get precise, natural language answers.
 
@@ -23,6 +23,7 @@ Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantic
 ## ✨ Features
 
 ### 🔄 Automated Document Processing
+
 - Detects new documents in Paperless-ngx automatically
 - Analyzes content using OpenAI API, Ollama, and other compatible backends
 - Assigns title, tags, document type, and correspondent
@@ -40,22 +41,25 @@ Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantic
   - ...and more!
 
 ### 🧠 RAG-Based AI Chat
+
 - Natural language document search and Q&A
 - Understands full document context (not just keywords)
 - Semantic memory powered by your own data
 - Fast, intelligent, privacy-friendly document queries  
-![RAG_CHAT_DEMO](https://raw.githubusercontent.com/clusterzx/paperless-ai/refs/heads/main/ppairag.png)
+  ![RAG_CHAT_DEMO](https://raw.githubusercontent.com/clusterzx/paperless-ai/refs/heads/main/ppairag.png)
 
 ### ⚙️ Manual Processing
+
 - Web interface for manual AI tagging
 - Useful when reviewing sensitive documents
 - Accessible via `/manual`
 
 ### 🧩 Smart Tagging & Rules
+
 - Define rules to limit which documents are processed
 - Disable prompts and apply tags automatically
 - Set custom output tags for tracked classification  
-![PPAI_SHOWCASE3](https://github.com/user-attachments/assets/1fc9f470-6e45-43e0-a212-b8fa6225e8dd)
+  ![PPAI_SHOWCASE3](https://github.com/user-attachments/assets/1fc9f470-6e45-43e0-a212-b8fa6225e8dd)
 
 ---
 
@@ -95,6 +99,86 @@ npm run test
 - ✅ Tag rules and filters
 - ✅ Integrated document chat with RAG
 - ✅ Responsive web interface
+
+---
+
+## 🔌 MCP Server (Model Context Protocol)
+
+Paperless-AI includes an MCP server (`mcp-server.js`) that exposes your document
+archive as tools for AI assistants like Claude Desktop, VS Code Copilot, and
+other MCP-compatible clients.
+
+### Available Tools
+
+| Tool               | Description                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| `search_documents` | Hybrid BM25 + semantic search with optional date/correspondent filters   |
+| `ask_question`     | RAG-powered Q&A — retrieves context and generates an answer with sources |
+| `get_document`     | Retrieve a specific document by its Paperless-ngx ID                     |
+| `index_documents`  | Trigger reindexing of the RAG search engine                              |
+| `get_status`       | Check index health, document count, and AI model info                    |
+
+### Prerequisites
+
+The MCP server connects to a running paperless-ai instance over HTTP.
+Set `PAPERLESS_AI_URL` to point to your instance (defaults to `http://localhost:3000`).
+
+### Claude Desktop
+
+Add to `~/.claude/claude_desktop_config.json` (macOS/Linux) or
+`%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "paperless-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000"
+      }
+    }
+  }
+}
+```
+
+### VS Code (GitHub Copilot)
+
+Add to `.vscode/mcp.json` in your workspace (or user-level `settings.json`
+under `"mcp"`):
+
+```json
+{
+  "servers": {
+    "paperless-ai": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "paperless-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000"
+      }
+    }
+  }
+}
+```
 
 ---
 
