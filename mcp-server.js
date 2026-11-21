@@ -5,7 +5,15 @@
 //   node mcp-server.js
 //
 // Environment variables:
-//   PAPERLESS_AI_URL  — base URL of the paperless-ai web service (default: http://localhost:3000)
+//   PAPERLESS_AI_URL        — base URL of the paperless-ai web service (default: http://localhost:3000)
+//   PAPERLESS_AI_API_KEY    — the instance's API key (Settings), sent as x-api-key; for AUTH_MODE=local
+//   CF_ACCESS_CLIENT_ID     — Cloudflare Access service token ID; for AUTH_MODE=cf_access
+//   CF_ACCESS_CLIENT_SECRET — Cloudflare Access service token secret
+//
+// Every endpoint used here requires authentication. In cf_access mode the
+// service token signs in as "<client id>@service-token.cloudflareaccess",
+// which an admin approves and grants rag_chat (and rag_settings for indexing)
+// like any other user.
 
 const { Server } = require('@modelcontextprotocol/sdk/server/index.js');
 const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js');
@@ -14,17 +22,39 @@ const {
   ListToolsRequestSchema,
 } = require('@modelcontextprotocol/sdk/types.js');
 
-const BASE_URL = process.env.PAPERLESS_AI_URL || 'http://localhost:3000';
+const BASE_URL = (process.env.PAPERLESS_AI_URL || 'http://localhost:3000').replace(/\/+$/, '');
+
+function authHeaders() {
+  const headers = {};
+  if (process.env.PAPERLESS_AI_API_KEY) {
+    headers['x-api-key'] = process.env.PAPERLESS_AI_API_KEY;
+  }
+  if (process.env.CF_ACCESS_CLIENT_ID && process.env.CF_ACCESS_CLIENT_SECRET) {
+    headers['CF-Access-Client-Id'] = process.env.CF_ACCESS_CLIENT_ID;
+    headers['CF-Access-Client-Secret'] = process.env.CF_ACCESS_CLIENT_SECRET;
+  }
+  return headers;
+}
 
 async function fetchJSON(path, options = {}) {
   const url = `${BASE_URL}${path}`;
   const res = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
     ...options,
+    // An unauthenticated request is redirected to the login page; follow
+    // nothing, so that is reported as what it is instead of as bad JSON.
+    redirect: 'manual',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(), ...options.headers },
   });
+  if (res.status >= 300 && res.status < 400) {
+    throw new Error(`Not authenticated (redirected to ${res.headers.get('location') || 'login'}): set PAPERLESS_AI_API_KEY, or CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET`);
+  }
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`HTTP ${res.status}: ${text}`);
+  }
+  const type = res.headers.get('content-type') || '';
+  if (!type.includes('application/json')) {
+    throw new Error(`Expected JSON from ${path} but got ${type || 'no content type'}; check authentication`);
   }
   return res.json();
 }
@@ -127,16 +157,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       }
 
       case 'get_document': {
-        // Use the paperless-ai proxy to get document content
-        const result = await fetchJSON('/api/rag/search', {
-          method: 'POST',
-          body: JSON.stringify({ query: `id:${args.doc_id}` }),
-        });
-        const doc = result.find(r => r.doc_id === args.doc_id);
-        if (doc) {
-          return { content: [{ type: 'text', text: `Title: ${doc.title}\nCorrespondent: ${doc.correspondent}\nDate: ${doc.date}\n\n${doc.snippet}` }] };
+        const docId = Number(args.doc_id);
+        if (!Number.isInteger(docId) || docId <= 0) {
+          throw new Error('doc_id must be a positive integer');
         }
-        return { content: [{ type: 'text', text: `Document ${args.doc_id} not found in index.` }] };
+        // A dedicated lookup by ID, checked against the caller's libraries
+        const doc = await fetchJSON(`/api/rag/documents/${docId}`);
+        const header = [
+          `Title: ${doc.title || 'Untitled'}`,
+          `Correspondent: ${doc.correspondent || ''}`,
+          `Date: ${doc.created || ''}`,
+          doc.document_type ? `Document type: ${doc.document_type}` : null,
+          doc.storage_path ? `Storage path: ${doc.storage_path}` : null,
+          doc.tags && doc.tags.length ? `Tags: ${doc.tags.join(', ')}` : null,
+        ].filter(Boolean).join('\n');
+        return { content: [{ type: 'text', text: `${header}\n\n${doc.content || ''}` }] };
       }
 
       case 'index_documents': {

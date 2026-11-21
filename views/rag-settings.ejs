@@ -429,13 +429,15 @@
             startIndexingBtn.disabled = true;
             startIndexingBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Starting...';
             try {
+                // Without force, the server asks Paperless for documents added
+                // since the last run and adds them to both search indexes.
                 const resp = await fetch('/api/rag/index', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ force: false, background: true })
                 });
                 if (resp.ok) {
-                    showToast('Indexing started');
+                    showToast('Indexing of new documents started');
                     checkStatus();
                 } else { showToast('Error starting indexing', 'error'); }
             } catch (e) { showToast(`Connection error: ${e.message}`, 'error'); }

@@ -17,8 +17,9 @@ const path = require('path');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
-const { authenticateJWT: legacyAuthenticateJWT, isAuthenticated: legacyIsAuthenticated } = require('./auth.js');
-const { authenticateJWT, isAuthenticated, AUTH_MODE, requirePermission, requireAdmin, getCfUser } = require('../middleware/cfAuth.js');
+const { authenticateJWT, isAuthenticated } = require('./auth.js');
+const { AUTH_MODE, requireAdmin, authorizeRequest, landingPath, getCfUser } = require('../middleware/cfAuth.js');
+const { assertDocumentAccess, filterDocuments, AccessDeniedError } = require('../services/accessService.js');
 const userModel = require('../models/userModel.js');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const customService = require('../services/customService.js');
@@ -153,13 +154,13 @@ router.use(async (req, res, next) => {
     return next();
   }
 
-  // CF Access mode: trust CF headers
+  // CF Access mode: identity from the verified Cloudflare Access token
   if (AUTH_MODE === 'cf_access') {
-    const user = getCfUser(req);
+    const user = await getCfUser(req);
     if (!user) {
       return res.status(401).send('Cloudflare Access authentication required.');
     }
-    if (!user.is_approved && !user.is_admin && !req.path.startsWith('/pending-approval')) {
+    if (!user.is_approved && !user.is_admin) {
       return res.redirect('/pending-approval');
     }
     req.cfUser = user;
@@ -201,9 +202,22 @@ router.use(async (req, res, next) => {
     console.error('Error checking setup configuration:', error);
     return res.status(500).send('Internal Server Error');
   }
-  
-  next();
+
+  // CF Access mode: approval says who may sign in, permissions say what they
+  // may reach. Every page and API is checked here, in one table.
+  authorizeRequest(req, res, next);
 });
+
+/**
+ * Send the response for a document the caller may not see, or rethrow.
+ */
+function handleDocumentAccessError(error, res) {
+  if (error instanceof AccessDeniedError) {
+    res.status(403).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
 
 // Protected route middleware for API endpoints
 const protectApiRoute = (req, res, next) => {
@@ -444,12 +458,17 @@ router.get('/logout', (req, res) => {
 });
 
 // Pending approval page (CF Access mode)
-router.get('/pending-approval', (req, res) => {
+router.get('/pending-approval', async (req, res) => {
   if (AUTH_MODE !== 'cf_access') return res.redirect('/login');
-  const user = getCfUser(req);
+  const user = await getCfUser(req);
   const email = user ? user.email : 'unknown';
   if (user && (user.is_approved || user.is_admin)) {
-    return res.redirect('/dashboard');
+    const target = landingPath(user);
+    if (target) return res.redirect(target);
+    return res.status(403).render('error', {
+      title: 'No features assigned',
+      message: 'Your account is approved but has no permissions yet. Ask an administrator to grant you access.',
+    });
   }
   res.render('pending-approval', { email });
 });
@@ -682,6 +701,13 @@ router.get('/thumb/:documentId', async (req, res) => {
   const cachePath = path.join('./public/images', `${req.params.documentId}.png`);
 
   try {
+    try {
+      await assertDocumentAccess(req, req.params.documentId);
+    } catch (error) {
+      if (handleDocumentAccessError(error, res)) return;
+      throw error;
+    }
+
     // Prüfe ob das Bild bereits im Cache existiert
     try {
       await fs.access(cachePath);
@@ -766,7 +792,7 @@ router.get('/thumb/:documentId', async (req, res) => {
 router.get('/chat', async (req, res) => {
   try {
       const {open} = req.query;
-      const documents = await paperlessService.getDocuments();
+      const documents = await filterDocuments(req, await paperlessService.getDocuments());
       const version = configFile.PAPERLESS_AI_VERSION || ' ';
       res.render('chat', { documents, open, version });
   } catch (error) {
@@ -861,9 +887,16 @@ router.get('/chat', async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/chat/init', async (req, res) => {
-  const documentId = req.query.documentId;
-  const result = await ChatService.initializeChat(documentId);
-  res.json(result);
+  try {
+    const documentId = req.query.documentId;
+    await assertDocumentAccess(req, documentId);
+    const result = await ChatService.initializeChat(documentId);
+    res.json(result);
+  } catch (error) {
+    if (handleDocumentAccessError(error, res)) return;
+    console.error('[ERRO] initializing chat:', error);
+    res.status(500).json({ error: 'Failed to initialize chat' });
+  }
 });
 
 // Nachricht senden
@@ -950,10 +983,12 @@ router.post('/chat/message', async (req, res) => {
     if (!documentId || !message) {
       return res.status(400).json({ error: 'Document ID and message are required' });
     }
+    await assertDocumentAccess(req, documentId);
     
     // Use the new streaming method
     await ChatService.sendMessageStream(documentId, message, res);
   } catch (error) {
+    if (handleDocumentAccessError(error, res)) return;
     console.error('Chat message error:', error);
     res.status(500).json({ error: error.message });
   }
@@ -1050,9 +1085,11 @@ router.get('/chat/init/:documentId', async (req, res) => {
       if (!documentId) {
           return res.status(400).json({ error: 'Document ID is required' });
       }
+      await assertDocumentAccess(req, documentId);
       const result = await ChatService.initializeChat(documentId);
       res.json(result);
   } catch (error) {
+      if (handleDocumentAccessError(error, res)) return;
       console.error('[ERRO] initializing chat:', error);
       res.status(500).json({ error: 'Failed to initialize chat' });
   }

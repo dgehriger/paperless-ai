@@ -2,7 +2,6 @@
 const axios = require('axios');
 const fs = require('fs').promises;
 const path = require('path');
-const config = require('../config/config');
 const AIServiceFactory = require('./aiServiceFactory');
 const paperlessService = require('./paperlessService');
 
@@ -91,14 +90,8 @@ class RagService {
    * Issue multiple RAGZ queries (original + per-entity) and merge/deduplicate sources.
    * This ensures broad multi-entity questions retrieve documents for ALL mentioned people.
    */
-  async _multiQueryContext(question, storagePaths, entities) {
-    const contextRequest = {
-      question,
-      max_sources: this.maxSources,
-    };
-    if (storagePaths && storagePaths.length > 0) {
-      contextRequest.storage_paths = storagePaths;
-    }
+  async _multiQueryContext(question, storagePaths, entities, libraries = null) {
+    const contextRequest = this._contextRequest(question, this.maxSources, storagePaths, libraries);
 
     // Issue the original broad query
     const mainResp = await axios.post(`${this.baseUrl}/context`, contextRequest);
@@ -116,15 +109,19 @@ class RagService {
 
     for (const res of subResults) {
       if (!res || !res.data) continue;
+      let contributed = false;
       for (const src of (res.data.sources || [])) {
         if (!seenDocIds.has(src.doc_id)) {
           seenDocIds.add(src.doc_id);
           allSources.push(src);
-          // Append this doc's context snippet
-          if (res.data.context) {
-            allContext += '\n\n' + res.data.context;
-          }
+          contributed = true;
         }
+      }
+      // `context` covers every document of this sub-query, so it is appended
+      // once per sub-query that found something new -- not once per new
+      // document, which repeated the whole block for each of them.
+      if (contributed && res.data.context) {
+        allContext += '\n\n' + res.data.context;
       }
     }
 
@@ -133,22 +130,47 @@ class RagService {
   }
 
   /**
-   * Detect if a question is a follow-up that refers to the previous answer
-   * (e.g. "show as a table", "summarize that", "explain more")
+   * Detect a follow-up that only transforms the previous answer
+   * (e.g. "show that as a table", "summarize it", "tell me more").
+   *
+   * Skipping retrieval is only safe when the question cannot be asking for new
+   * documents, so a generic verb is not enough: "Show invoices from Bob" and
+   * "List my insurance policies" are new searches. A question qualifies when
+   * it is a bare continuation, or a transformation that refers back to what
+   * was already said (or is too short to name anything new).
    */
   _isFollowUpQuestion(question) {
     const q = question.toLowerCase().trim();
-    // Short questions referring to prior context
-    if (q.length < 80) {
-      const followUpPatterns = [
-        /^(show|display|format|present|list|summarize|explain|elaborate|clarify|translate|rewrite|repeat|shorten|expand|convert)\b/,
-        /\b(as a table|in a table|als tabelle|tabellarisch|in tabellenform)\b/,
-        /\b(more detail|more info|tell me more|kannst du|könntest du)\b/,
-        /\b(the same|das gleiche|nochmal|noch einmal)\b/,
-      ];
-      return followUpPatterns.some(p => p.test(q));
-    }
+    if (q.length >= 80) return false;
+
+    const words = q.split(/\s+/).filter(Boolean);
+    const ref = '(that|this|it|those|these|them|the above|your answer|the answer|the (?:previous|last) answer|das|dies|es|die antwort|deine antwort)';
+    // The reference must close the question ("summarize that", "fasse das
+    // zusammen"), so "summarize this year's invoices" is still a search.
+    const endsWithReference = new RegExp(`\\b${ref}(\\s+(again|please|zusammen|kurz|nochmal|bitte))?\\W*$`);
+    // ...or sit right before the format ("show that as a table"), so "show
+    // this year's invoices as a table" is still a search.
+    const referenceBeforeFormat = new RegExp(`\\b${ref}\\s+(as|in|als|auf)\\b`);
+    const standalone = /^(please\s+|bitte\s+)?(tell me more|more details?|more info|go on|continue|again|repeat|nochmal|noch einmal|mehr details|weiter|wiederholen)\W*$/;
+    const transformVerb = /^(please\s+|bitte\s+|can you\s+|could you\s+|kannst du\s+|könntest du\s+)?(summari[sz]e|translate|rewrite|rephrase|shorten|condense|expand|reformat|format|convert|repeat|explain|elaborate on|clarify|show|display|present|fasse|übersetze|formuliere|kürze|erkläre|wiederhole|zeige)\b/;
+    const transformPhrase = /\b(as a table|in a table|as a list|as bullet points|in bullet points|in english|in german|in french|auf deutsch|auf englisch|als tabelle|tabellarisch|in tabellenform|als liste|in stichpunkten)\b/;
+
+    if (standalone.test(q)) return true;
+    if (transformPhrase.test(q) && (words.length <= 4 || referenceBeforeFormat.test(q))) return true;
+    if (transformVerb.test(q) && endsWithReference.test(q)) return true;
     return false;
+  }
+
+  /**
+   * A request body for the RAG service's /context endpoint.
+   * `libraries` is the caller's library scope; the RAG service applies it
+   * (and the storage-path selection) before ranking, never after.
+   */
+  _contextRequest(question, maxSources, storagePaths, libraries) {
+    const request = { question, max_sources: maxSources };
+    if (storagePaths && storagePaths.length > 0) request.storage_paths = storagePaths;
+    if (libraries && libraries.length > 0) request.libraries = libraries;
+    return request;
   }
 
   /**
@@ -316,7 +338,7 @@ class RagService {
    * @param {string} question - The question to ask
    * @returns {Promise<{answer: string, sources: Array}>} - AI response and source documents
    */
-  async askQuestion(question, chatHistory = [], storagePaths = []) {
+  async askQuestion(question, chatHistory = [], storagePaths = [], libraries = null) {
     try {
       // Load system prompt once — used for both query decomposition and answer generation
       const savedPrompt = await this.getSystemPrompt();
@@ -345,15 +367,9 @@ class RagService {
 
         if (entities.length >= 2) {
           // Broad query mentioning multiple people/entities — use multi-query retrieval
-          contextData = await this._multiQueryContext(searchQuery, storagePaths, entities);
+          contextData = await this._multiQueryContext(searchQuery, storagePaths, entities, libraries);
         } else {
-          const contextRequest = { 
-            question: searchQuery,
-            max_sources: this.maxSources
-          };
-          if (storagePaths && storagePaths.length > 0) {
-            contextRequest.storage_paths = storagePaths;
-          }
+          const contextRequest = this._contextRequest(searchQuery, this.maxSources, storagePaths, libraries);
           const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
           contextData = response.data;
         }
@@ -391,8 +407,7 @@ class RagService {
 
           for (const refinedQ of refinement.queries.slice(0, 5)) {
             try {
-              const contextRequest = { question: refinedQ, max_sources: 8 };
-              if (storagePaths && storagePaths.length > 0) contextRequest.storage_paths = storagePaths;
+              const contextRequest = this._contextRequest(refinedQ, 8, storagePaths, libraries);
               const resp = await axios.post(`${this.baseUrl}/context`, contextRequest);
               for (const src of (resp.data.sources || [])) {
                 if (!existingDocIds.has(src.doc_id)) {
@@ -481,11 +496,15 @@ class RagService {
 
   /**
    * Get available storage paths from the RAG service
+   * @param {Array|null} libraries - library scope; only paths holding a
+   *   document in scope are returned
    * @returns {Promise<Array>} - List of storage paths
    */
-  async getStoragePaths() {
+  async getStoragePaths(libraries = null) {
     try {
-      const response = await axios.get(`${this.baseUrl}/storage-paths`);
+      const response = libraries && libraries.length > 0
+        ? await axios.post(`${this.baseUrl}/storage-paths`, { libraries })
+        : await axios.get(`${this.baseUrl}/storage-paths`);
       return response.data;
     } catch (error) {
       console.error('Error getting storage paths:', error.message);
@@ -495,14 +514,16 @@ class RagService {
 
   /**
    * Start indexing documents in the RAG service
-   * @param {boolean} force - Whether to force refresh from source
+   * @param {boolean} force - Rebuild everything from source; otherwise fetch
+   *   what is new in Paperless and add it to both indexes
    * @returns {Promise<Object>} - Indexing status
    */
   async indexDocuments(force = false) {
     try {
-      const response = await axios.post(`${this.baseUrl}/indexing/start`, { 
-        force, 
-        background: true 
+      const response = await axios.post(`${this.baseUrl}/indexing/start`, {
+        force,
+        check_new: !force,
+        background: true
       });
       return response.data;
     } catch (error) {

@@ -61,10 +61,62 @@ BM25_WEIGHT = 0.3
 SEMANTIC_WEIGHT = 0.7
 MAX_RESULTS = int(os.getenv("RAG_MAX_RESULTS", "20"))
 
-# External embeddings API configuration
-RAG_EMBEDDINGS_API_URL = os.getenv("RAG_EMBEDDINGS_API_URL") or os.getenv("CUSTOM_BASE_URL", "https://openrouter.ai/api/v1")
-RAG_EMBEDDINGS_API_KEY = os.getenv("RAG_EMBEDDINGS_API_KEY") or os.getenv("CUSTOM_API_KEY", "")
-RAG_EMBEDDINGS_MODEL = os.getenv("RAG_EMBEDDINGS_MODEL", "text-embedding-3-small")
+# External embeddings API configuration.
+#
+# Embeddings come from an OpenAI-compatible /embeddings endpoint; there is no
+# local model any more. Explicit RAG_EMBEDDINGS_* settings win. Without them
+# the endpoint is derived from the AI provider Paperless-AI is already set up
+# with, so an existing installation keeps indexing after the upgrade:
+#
+#   AI_PROVIDER=openai  -> https://api.openai.com/v1 with OPENAI_API_KEY
+#   AI_PROVIDER=ollama  -> OLLAMA_API_URL + /v1 (Ollama's OpenAI-compatible API),
+#                          model nomic-embed-text unless RAG_EMBEDDINGS_MODEL is set
+#   AI_PROVIDER=custom  -> CUSTOM_BASE_URL with CUSTOM_API_KEY
+#
+# Anything else (Azure, or a provider with no key) must set RAG_EMBEDDINGS_*;
+# resolve_embedding_config() reports what is missing instead of indexing with
+# an empty key.
+DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
+DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text"
+
+
+def resolve_embedding_config():
+    """Return the embedding endpoint as a dict: url, key, model, source, error."""
+    explicit_url = (os.getenv("RAG_EMBEDDINGS_API_URL") or "").strip()
+    explicit_key = (os.getenv("RAG_EMBEDDINGS_API_KEY") or "").strip()
+    explicit_model = (os.getenv("RAG_EMBEDDINGS_MODEL") or "").strip()
+    provider = (os.getenv("AI_PROVIDER") or "").strip().lower()
+
+    url, key, model, source = "", "", "", ""
+    if explicit_url or explicit_key:
+        url, key, source = explicit_url, explicit_key, "RAG_EMBEDDINGS_*"
+        if not url and provider == "openai":
+            url = "https://api.openai.com/v1"
+    elif provider == "openai":
+        url, key, source = "https://api.openai.com/v1", (os.getenv("OPENAI_API_KEY") or "").strip(), "AI_PROVIDER=openai"
+    elif provider == "ollama":
+        base = (os.getenv("OLLAMA_API_URL") or "").strip().rstrip("/")
+        url = f"{base}/v1" if base and not base.endswith("/v1") else base
+        # Ollama ignores the key, but the OpenAI client refuses an empty one.
+        key, model, source = "ollama", DEFAULT_OLLAMA_EMBEDDING_MODEL, "AI_PROVIDER=ollama"
+    elif provider == "custom" or os.getenv("CUSTOM_BASE_URL"):
+        url, key, source = (os.getenv("CUSTOM_BASE_URL") or "").strip(), (os.getenv("CUSTOM_API_KEY") or "").strip(), "AI_PROVIDER=custom"
+
+    model = explicit_model or model or DEFAULT_EMBEDDING_MODEL
+    error = None
+    if not url:
+        error = ("No embeddings endpoint configured: set RAG_EMBEDDINGS_API_URL and RAG_EMBEDDINGS_API_KEY "
+                 "(or use AI_PROVIDER openai, ollama or custom, from which they are derived)")
+    elif not key:
+        error = f"No API key for the embeddings endpoint {url} ({source}): set RAG_EMBEDDINGS_API_KEY"
+    return {"url": url.rstrip("/"), "key": key, "model": model, "source": source or "none", "error": error}
+
+
+def embedding_fingerprint(config):
+    """What a stored vector depends on. A collection built under another one is unusable."""
+    if not config:
+        return ""
+    return f"{config['url']}|{config['model']}"
 
 # Download NLTK resources if not present
 nltk.download('punkt', quiet=True)
@@ -88,21 +140,67 @@ class SystemStatus(BaseModel):
     indexing_status: IndexingStatus = IndexingStatus()
 
 # Request models
+class LibraryFilter(BaseModel):
+    """One library of a restricted user, written in Paperless names.
+
+    A document matches when it satisfies every field that is set: its storage
+    path, correspondent or document type is one of the listed names, or it
+    carries any of the listed tags. Names compare case-insensitively. A user's
+    scope is a list of these, and a document is in scope when it matches any.
+    Must agree with matchesScope() in services/accessService.js.
+    """
+    storage_paths: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
+    correspondents: Optional[List[str]] = None
+    document_types: Optional[List[str]] = None
+
+    def matches(self, doc) -> bool:
+        def norm(value):
+            return str(value or "").strip().lower()
+        if self.storage_paths and norm(doc.get("storage_path")) not in {norm(v) for v in self.storage_paths}:
+            return False
+        if self.correspondents and norm(doc.get("correspondent")) not in {norm(v) for v in self.correspondents}:
+            return False
+        # Indexes built before document types were recorded carry none, so a
+        # type-restricted library matches nothing there until a re-index.
+        if self.document_types and norm(doc.get("document_type")) not in {norm(v) for v in self.document_types}:
+            return False
+        if self.tags:
+            wanted = {norm(v) for v in self.tags}
+            if not any(norm(t) in wanted for t in (doc.get("tags") or [])):
+                return False
+        return True
+
+
+def matches_libraries(doc, libraries) -> bool:
+    """None means unrestricted; an empty list grants nothing."""
+    if libraries is None:
+        return True
+    return any(library.matches(doc) for library in libraries)
+
+
 class SearchRequest(BaseModel):
     query: str
     from_date: Optional[str] = None
     to_date: Optional[str] = None
     correspondent: Optional[str] = None
     storage_paths: Optional[List[str]] = None
+    libraries: Optional[List[LibraryFilter]] = None
 
 class IndexingRequest(BaseModel):
     force: bool = False
     background: bool = True
+    # Ask Paperless for documents added since the last run and index them.
+    check_new: bool = False
 
 class AskQuestionRequest(BaseModel):
     question: str
     max_sources: int = 5
     storage_paths: Optional[List[str]] = None
+    libraries: Optional[List[LibraryFilter]] = None
+
+class StoragePathsRequest(BaseModel):
+    libraries: Optional[List[LibraryFilter]] = None
 
 # Response models
 class SearchResult(BaseModel):
@@ -125,7 +223,8 @@ class GlobalState:
         self.indexing_status = IndexingStatus()
         self.state_schema_version = 1  # Track schema version for future upgrades
         self._indexed_document_ids = set()  # Store temporarily until data_manager is initialized
-    
+        self._embedding_failed_ids = set()  # Documents in the corpus whose vectors could not be stored
+
     def save_state(self):
         """Save global state to disk with schema version"""
         try:
@@ -148,7 +247,8 @@ class GlobalState:
                     "chroma_ready": self.system_status.chroma_ready,
                     "bm25_ready": self.system_status.bm25_ready
                 },
-                "indexed_document_ids": list(self.data_manager.indexed_document_ids) if self.data_manager else list(self._indexed_document_ids)
+                "indexed_document_ids": list(self.data_manager.indexed_document_ids) if self.data_manager else list(self._indexed_document_ids),
+                "embedding_failed_ids": sorted(self.data_manager.embedding_failed_ids) if self.data_manager else sorted(self._embedding_failed_ids)
             }
             
             with open(STATE_FILE, 'w', encoding='utf-8') as f:
@@ -195,7 +295,8 @@ class GlobalState:
                 
                 # Store indexed_document_ids for later use when data_manager is initialized
                 self._indexed_document_ids = set(state_dict.get("indexed_document_ids", []))
-                
+                self._embedding_failed_ids = set(state_dict.get("embedding_failed_ids", []))
+
                 logger.info(f"System state loaded from {STATE_FILE} with {len(self._indexed_document_ids)} indexed document IDs")
                 return True
             else:
@@ -243,7 +344,12 @@ class DataManager:
         # Add tracking for indexed documents
         self.indexed_document_ids = global_state._indexed_document_ids if global_state._indexed_document_ids else set()
         self.new_document_ids = set()  # Track IDs of newly discovered documents
-        
+        # Documents that are in the corpus (and BM25) but have no vector,
+        # because every embedding attempt failed. They are retried whenever
+        # new embeddings are synced, so a transient API failure is not final.
+        self.embedding_failed_ids = set(global_state._embedding_failed_ids)
+        self.embedding_config = None
+
         # Wenn True, initialisiere beim Start
         if initialize_on_start:
             self.initialize_models()
@@ -252,15 +358,21 @@ class DataManager:
         """Initialize ChromaDB and external embedding function (no local models needed)"""
         try:
             if self.embedding_function is None:
-                logger.info(f"Initializing external embedding function: model={RAG_EMBEDDINGS_MODEL}, api_url={RAG_EMBEDDINGS_API_URL}")
+                config = resolve_embedding_config()
+                if config["error"]:
+                    logger.error(f"Embeddings are not configured: {config['error']}")
+                    global_state.indexing_status.message = config["error"]
+                    self.is_initialized = False
+                    return False
+                logger.info(f"Initializing external embedding function: model={config['model']}, api_url={config['url']} (from {config['source']})")
                 # Use OpenAI-compatible embedding function with custom base URL
-                api_base = RAG_EMBEDDINGS_API_URL.rstrip('/')
                 self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
-                    api_key=RAG_EMBEDDINGS_API_KEY,
-                    api_base=api_base,
-                    model_name=RAG_EMBEDDINGS_MODEL
+                    api_key=config["key"],
+                    api_base=config["url"],
+                    model_name=config["model"]
                 )
-                
+                self.embedding_config = config
+
             if self.chroma_client is None:
                 logger.info("Initializing ChromaDB client")
                 self.chroma_client = chromadb.PersistentClient(path=CHROMADB_DIR)
@@ -414,6 +526,20 @@ class DataManager:
                     if tag_response.status_code == 200:
                         tags.append(tag_response.json().get("name", ""))
             
+            # Get document type name (library filters restrict by it)
+            document_type = ""
+            if doc.get("document_type"):
+                try:
+                    dt_response = requests.get(
+                        f"{self.paperless_url}/api/document_types/{doc['document_type']}/",
+                        headers=self._get_headers(),
+                        timeout=10
+                    )
+                    if dt_response.status_code == 200:
+                        document_type = dt_response.json().get("name", "")
+                except Exception:
+                    pass
+
             # Get storage path name
             storage_path = ""
             if doc.get("storage_path"):
@@ -437,6 +563,7 @@ class DataManager:
                 "created": doc.get("created_date", doc.get("created", "")),
                 "tags": tags,
                 "storage_path": storage_path,
+                "document_type": document_type,
                 "last_updated": doc.get("modified", "")
             }
             
@@ -496,9 +623,12 @@ class DataManager:
                 if check_new:
                     logger.info("Explicitly checking for new documents")
                     new_docs = self._check_for_new_documents()
+                    known = {doc["id"] for doc in self.documents}
+                    new_docs = [doc for doc in new_docs if doc["id"] not in known]
+                    self.new_document_ids = {doc["id"] for doc in new_docs}
                     if new_docs:
                         logger.info(f"Found {len(new_docs)} new documents")
-                        # Add new documents to our collection
+                        # Append: BM25 positions follow the order of self.documents
                         self.documents.extend(new_docs)
                         self.save_documents()
                     else:
@@ -585,7 +715,18 @@ class DataManager:
                         embedding_function=self.embedding_function
                     )
                     logger.info(f"Loaded existing ChromaDB collection '{COLLECTION_NAME}'")
-                    
+
+                    stored = (collection.metadata or {}).get("embedding_model")
+                    current = embedding_fingerprint(self.embedding_config)
+                    if stored != current:
+                        # Vectors from another model (or a local model before
+                        # that) live in another space, often of another
+                        # dimension: querying them with this model fails or
+                        # returns noise. Rebuild instead of reusing them.
+                        logger.warning(f"ChromaDB collection was built with embeddings '{stored or 'unrecorded (local model)'}', "
+                                       f"now configured: '{current}'. Rebuilding the collection.")
+                        raise ValueError("embedding model changed")
+
                     # Check if collection is valid by fetching count
                     collection_count = collection.count()
                     logger.info(f"ChromaDB collection contains {collection_count} documents")
@@ -596,21 +737,9 @@ class DataManager:
                         force_update = True
                         # Recreate the collection below in the "else" block
                     else:
-                        # If we have new documents but aren't forcing an update,
-                        # add only the new documents to the collection
-                        if self.new_document_ids and not force_update:
-                            logger.info(f"Adding {len(self.new_document_ids)} new documents to ChromaDB collection")
-                            
-                            # Get only the new documents to add
-                            new_docs = []
-                            for doc in self.documents:
-                                if doc["id"] in self.new_document_ids:
-                                    new_docs.append(doc)
-                            
-                            # Add only the new documents
-                            if new_docs:
-                                self._add_documents_to_chroma(collection, new_docs)
-                        
+                        # Add new documents, and retry earlier failures
+                        self.sync_new_embeddings(collection)
+
                         self.collection = collection
                         self.chroma_initialized = True
                         global_state.system_status.chroma_ready = True
@@ -635,14 +764,16 @@ class DataManager:
             logger.info(f"Creating new ChromaDB collection '{COLLECTION_NAME}'")
             collection = self.chroma_client.create_collection(
                 name=COLLECTION_NAME,
-                embedding_function=self.embedding_function
+                embedding_function=self.embedding_function,
+                metadata={"embedding_model": embedding_fingerprint(self.embedding_config)}
             )
-            
+
             # Load documents if not already loaded
             if not self.documents:
                 self.load_documents()
-            
-            # Add all documents to collection
+
+            # Add all documents to collection; every earlier failure is retried
+            self.embedding_failed_ids = set()
             self._add_documents_to_chroma(collection, self.documents)
             
             self.collection = collection
@@ -673,9 +804,25 @@ class DataManager:
     # retry with less text on failure.
     MAX_EMBEDDING_CHARS = 10000
 
+    def sync_new_embeddings(self, collection):
+        """Store vectors for new documents and for those whose embedding failed before."""
+        pending = [doc for doc in self.documents
+                   if doc["id"] in self.new_document_ids or doc["id"] in self.embedding_failed_ids]
+        if not pending:
+            return
+        logger.info(f"Adding {len(pending)} documents to ChromaDB collection "
+                    f"({len(self.embedding_failed_ids)} retried after an earlier failure)")
+        self._add_documents_to_chroma(collection, pending)
+
     def _add_documents_to_chroma(self, collection, documents):
-        """Add documents to ChromaDB collection"""
+        """Add documents to ChromaDB collection.
+
+        A document whose embedding fails at every truncation is recorded in
+        embedding_failed_ids (and persisted) rather than dropped, so the next
+        sync retries it; one that succeeds is cleared from that set.
+        """
         batch_size = 20
+        failed = set()
         total_docs = len(documents)
         
         for i in range(0, total_docs, batch_size):
@@ -703,7 +850,7 @@ class DataManager:
             
             try:
                 collection.upsert(ids=ids, documents=texts, metadatas=metadatas)
-            except ValueError:
+            except Exception:
                 # Batch failed — fall back to one-at-a-time with progressive truncation
                 logger.warning(f"Batch {batch_num} failed, falling back to individual upserts")
                 for j in range(len(ids)):
@@ -716,13 +863,19 @@ class DataManager:
                                 metadatas=[metadatas[j]]
                             )
                             break
-                        except ValueError:
+                        except Exception:
                             if attempt < 2:
                                 logger.warning(f"Doc {ids[j]} failed at {limit} chars, retrying shorter")
                             else:
-                                logger.error(f"Doc {ids[j]} failed even at {limit} chars, skipping")
-        
-        logger.info(f"Added/updated {total_docs} documents to ChromaDB collection")
+                                logger.error(f"Doc {ids[j]} failed even at {limit} chars; it will be retried on the next indexing run")
+                                failed.add(batch[j]["id"])
+
+        attempted = {doc["id"] for doc in documents}
+        self.embedding_failed_ids = (self.embedding_failed_ids - attempted) | failed
+        global_state.save_state()
+        if failed:
+            logger.error(f"{len(failed)} of {total_docs} documents have no vector and are reachable by keyword search only")
+        logger.info(f"Added/updated {total_docs - len(failed)} documents to ChromaDB collection")
 
 
 # Search Engine
@@ -810,6 +963,10 @@ class SearchEngine:
                 self.collection = self.data_manager.setup_chroma_collection(force_update=force_update)
             else:
                 self.collection = self.data_manager.collection
+                # The collection is already open, so setup_chroma_collection()
+                # will not run: store the new documents' vectors here, or an
+                # incremental run would add them to BM25 only.
+                self.data_manager.sync_new_embeddings(self.collection)
             
             # Check if we have new documents
             have_new_docs = bool(self.data_manager.new_document_ids)
@@ -841,9 +998,12 @@ class SearchEngine:
                 logger.info("Setting up BM25 from scratch")
                 self._setup_bm25()
             
+            # Both indexes now hold the new documents; do not add them again
+            self.data_manager.new_document_ids = set()
+
             # Validate the search engine state
             valid = self.validate_state()
-            
+
             if valid:
                 self.is_initialized = True
                 global_state.system_status.index_ready = True
@@ -1015,8 +1175,8 @@ class SearchEngine:
             # If anything goes wrong, rebuild from scratch
             self._setup_bm25()
     
-    def keyword_search(self, query, top_k=MAX_RESULTS):
-        """Perform keyword search using BM25"""
+    def keyword_search(self, query, top_k=MAX_RESULTS, accept=None):
+        """Perform keyword search using BM25, over the documents `accept` admits"""
         if not self.is_initialized:
             logger.error("Search engine not initialized for keyword search")
             raise Exception("Search engine not initialized")
@@ -1045,9 +1205,13 @@ class SearchEngine:
         doc_scores = [(i, score) for i, score in enumerate(scores)]
         doc_scores.sort(key=lambda x: x[1], reverse=True)
         
-        # Get top-k documents
+        # Get top-k documents among those the filter admits
         results = []
-        for i, score in doc_scores[:top_k]:
+        for i, score in doc_scores:
+            if len(results) >= top_k or score <= 0:
+                break
+            if accept is not None and not accept(self.documents[i]):
+                continue
             if score > 0:  # Only include documents with non-zero scores
                 try:
                     doc = self.documents[i]
@@ -1069,8 +1233,12 @@ class SearchEngine:
         logger.info(f"Keyword search found {len(results)} results")
         return results
     
-    def semantic_search(self, query, top_k=MAX_RESULTS):
-        """Perform semantic search using ChromaDB"""
+    def semantic_search(self, query, top_k=MAX_RESULTS, accept=None):
+        """Perform semantic search using ChromaDB, over the documents `accept` admits.
+
+        With a filter the query ranks the whole collection, so a document that
+        passes the filter is found however far down the global ranking it is.
+        """
         if not self.is_initialized:
             logger.error("Search engine not initialized for semantic search")
             raise Exception("Search engine not initialized")
@@ -1080,9 +1248,14 @@ class SearchEngine:
             raise Exception("ChromaDB collection not properly initialized")
             
         try:
+            if accept is None:
+                n_results = min(top_k, 100)  # Limit to avoid overloading
+            else:
+                n_results = max(1, self.collection.count())
             results = self.collection.query(
                 query_texts=[query],
-                n_results=min(top_k, 100)  # Limit to avoid overloading
+                n_results=n_results,
+                include=["distances"]
             )
             
             if not results or "ids" not in results or not results["ids"] or len(results["ids"]) == 0:
@@ -1095,11 +1268,16 @@ class SearchEngine:
                 return []
             
             documents = []
+            docs_by_id = {str(d["id"]): d for d in self.documents}
             for i, doc_id in enumerate(results["ids"][0]):
+                if len(documents) >= top_k:
+                    break
                 try:
                     # Find the document in our list
-                    doc = next((d for d in self.documents if str(d["id"]) == doc_id), None)
-                    
+                    doc = docs_by_id.get(doc_id)
+                    if doc and accept is not None and not accept(doc):
+                        continue
+
                     if doc:
                         distance = results["distances"][0][i] if "distances" in results and len(results["distances"]) > 0 else 1.0
                         documents.append({
@@ -1123,8 +1301,13 @@ class SearchEngine:
             logger.error(traceback.format_exc())
             return []
     
-    def hybrid_search(self, query, top_k=MAX_RESULTS):
-        """Perform hybrid search combining BM25 and semantic search"""
+    def hybrid_search(self, query, top_k=MAX_RESULTS, accept=None):
+        """Perform hybrid search combining BM25 and semantic search.
+
+        `accept` filters candidates inside both searches, before either is cut
+        to its top results, so a filter narrows the ranking instead of being
+        applied to whatever survived it.
+        """
         logger.info(f"Performing hybrid search for query: '{query}'")
         
         if not self.is_initialized:
@@ -1140,7 +1323,7 @@ class SearchEngine:
             if not self.bm25_initialized:
                 # Fall back to just semantic search if BM25 fails
                 logger.warning("Falling back to semantic search only")
-                return self.semantic_search(query, top_k)
+                return self.semantic_search(query, top_k, accept)
                 
         if not self.collection:
             logger.error("ChromaDB collection not available for hybrid search")
@@ -1148,23 +1331,27 @@ class SearchEngine:
             if not self.collection:
                 # Fall back to just keyword search if semantic fails
                 logger.warning("Falling back to keyword search only")
-                return self.keyword_search(query, top_k)
+                return self.keyword_search(query, top_k, accept)
             
         # Get results from both search methods
         try:
-            keyword_results = self.keyword_search(query, top_k=top_k*2)
+            keyword_results = self.keyword_search(query, top_k=top_k*2, accept=accept)
         except Exception as e:
             logger.error(f"Keyword search failed: {str(e)}")
             keyword_results = []
             
         try:
-            semantic_results = self.semantic_search(query, top_k=top_k*2)
+            semantic_results = self.semantic_search(query, top_k=top_k*2, accept=accept)
         except Exception as e:
             logger.error(f"Semantic search failed: {str(e)}")
             semantic_results = []
             
         # If both searches failed, return a proper error
         if not keyword_results and not semantic_results:
+            if accept is not None:
+                # Nothing passed the filter: an answer, not a failure
+                logger.info("No documents matched the search filters")
+                return []
             logger.error("Both search methods failed")
             raise Exception("All search methods failed")
         
@@ -1277,6 +1464,31 @@ class SearchEngine:
                 return content[:max_len] + "..."
             return ""
     
+    @staticmethod
+    def _document_filter(request: SearchRequest):
+        """A predicate over corpus documents for the request's filters, or None."""
+        libraries = request.libraries
+        if not (request.from_date or request.to_date or request.correspondent
+                or request.storage_paths or libraries is not None):
+            return None
+        storage_paths = set(request.storage_paths or [])
+        correspondent = (request.correspondent or "").lower()
+
+        def accept(doc):
+            doc_date = str(doc.get("created") or "").split("T")[0]
+            if request.from_date and doc_date and doc_date < request.from_date:
+                return False
+            if request.to_date and doc_date and doc_date > request.to_date:
+                return False
+            doc_correspondent = doc.get("correspondent") or ""
+            if correspondent and doc_correspondent and correspondent not in doc_correspondent.lower():
+                return False
+            if storage_paths and (doc.get("storage_path") or "") not in storage_paths:
+                return False
+            return matches_libraries(doc, libraries)
+
+        return accept
+
     def search(self, request: SearchRequest):
         """Perform full search with filters and reranking"""
         if not self.is_initialized:
@@ -1290,53 +1502,9 @@ class SearchEngine:
         logger.info(f"Performing search for: '{query}'")
         
         try:
-            # Perform hybrid search
-            results = self.hybrid_search(query)
-            
-            # Check if we got valid results
-            if not results:
-                logger.warning("Hybrid search returned no results")
-                return []
-                
-            # Apply filters
-            if request.from_date or request.to_date or request.correspondent or request.storage_paths:
-                filtered_results = []
-                for result in results:
-                    include = True
-                    
-                    # Filter by date range
-                    if request.from_date and result["date"]:
-                        try:
-                            doc_date = result["date"].split("T")[0]  # Get date part only
-                            if doc_date < request.from_date:
-                                include = False
-                        except:
-                            pass
-                    
-                    if request.to_date and result["date"]:
-                        try:
-                            doc_date = result["date"].split("T")[0]  # Get date part only
-                            if doc_date > request.to_date:
-                                include = False
-                        except:
-                            pass
-                    
-                    # Filter by correspondent
-                    if request.correspondent and result["correspondent"]:
-                        if request.correspondent.lower() not in result["correspondent"].lower():
-                            include = False
-                    
-                    # Filter by storage paths
-                    if request.storage_paths:
-                        doc_sp = result.get("storage_path", "")
-                        if not doc_sp or doc_sp not in request.storage_paths:
-                            include = False
-                    
-                    if include:
-                        filtered_results.append(result)
-                
-                results = filtered_results
-            
+            # Perform hybrid search, filtered before the top-k cut-off
+            results = self.hybrid_search(query, accept=self._document_filter(request))
+
             # Check if we still have results after filtering
             if not results:
                 logger.warning("No results after applying filters")
@@ -1410,9 +1578,11 @@ def run_indexing(force_update=False, check_new=False):
         
         # Determine if new documents were found
         new_docs_count = len(global_state.data_manager.new_document_ids)
-        
+        retry_count = len(global_state.data_manager.embedding_failed_ids)
+
         # Update the status message based on whether new documents were found
-        if new_docs_count > 0:
+        # (or documents whose embedding failed last time are due a retry)
+        if new_docs_count > 0 or retry_count > 0:
             global_state.indexing_status.message = f"Indexiere {new_docs_count} neue Dokumente"
             global_state.save_state()
             
@@ -1422,6 +1592,9 @@ def run_indexing(force_update=False, check_new=False):
             global_state.search_engine.initialize(force_update=force_update)
             
             global_state.indexing_status.message = f"Indexierung abgeschlossen - {new_docs_count} neue Dokumente hinzugefügt"
+            failed_count = len(global_state.data_manager.embedding_failed_ids)
+            if failed_count:
+                global_state.indexing_status.message += f" ({failed_count} ohne Embedding, werden beim nächsten Lauf erneut versucht)"
         else:
             # If we have documents loaded and search engine not initialized, load existing indexes
             if global_state.system_status.data_loaded and not global_state.search_engine.is_initialized:
@@ -1625,6 +1798,12 @@ async def startup_event():
                             name=COLLECTION_NAME,
                             embedding_function=global_state.data_manager.embedding_function
                         )
+                        stored = (collection.metadata or {}).get("embedding_model")
+                        current = embedding_fingerprint(global_state.data_manager.embedding_config)
+                        if stored != current:
+                            # setup_chroma_collection() rebuilds it on the first indexing run
+                            raise ValueError(f"collection embeddings '{stored or 'unrecorded (local model)'}' "
+                                             f"do not match the configured '{current}'")
                         global_state.data_manager.collection = collection
                         global_state.data_manager.chroma_initialized = True
                         global_state.system_status.chroma_ready = True
@@ -1746,6 +1925,8 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
         search_req = SearchRequest(query=request.question)
         if request.storage_paths:
             search_req.storage_paths = request.storage_paths
+        if request.libraries is not None:
+            search_req.libraries = request.libraries
         search_results = search_engine.search(search_req)
         
         # Check if we got any results
@@ -1791,17 +1972,29 @@ async def get_context(request: AskQuestionRequest, search_engine: SearchEngine =
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+def _storage_paths(libraries=None):
+    paths = set()
+    if global_state.data_manager and global_state.data_manager.documents:
+        for doc in global_state.data_manager.documents:
+            sp = doc.get("storage_path", "")
+            if sp and matches_libraries(doc, libraries):
+                paths.add(sp)
+    return sorted(paths)
+
 @app.get("/storage-paths")
 async def get_storage_paths():
     """Get list of unique storage paths from indexed documents"""
     try:
-        paths = set()
-        if global_state.data_manager and global_state.data_manager.documents:
-            for doc in global_state.data_manager.documents:
-                sp = doc.get("storage_path", "")
-                if sp:
-                    paths.add(sp)
-        return sorted(paths)
+        return _storage_paths()
+    except Exception as e:
+        logger.error(f"Error getting storage paths: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/storage-paths")
+async def get_scoped_storage_paths(request: StoragePathsRequest):
+    """Storage paths that hold at least one document in the given library scope"""
+    try:
+        return _storage_paths(request.libraries)
     except Exception as e:
         logger.error(f"Error getting storage paths: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -1862,11 +2055,11 @@ async def start_indexing(request: IndexingRequest, background_tasks: BackgroundT
     
     # Start indexing in background
     if request.background:
-        background_tasks.add_task(run_indexing, request.force, False)
+        background_tasks.add_task(run_indexing, request.force, request.check_new)
         return {"status": "started", "message": "Indexing started in background"}
     else:
         # Run indexing in foreground
-        run_indexing(request.force, False)
+        run_indexing(request.force, request.check_new)
         return {"status": "completed", "message": "Indexing completed"}
 
 @app.post("/initialize")

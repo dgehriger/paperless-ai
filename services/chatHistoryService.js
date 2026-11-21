@@ -7,21 +7,61 @@ const HISTORY_DIR = path.join(process.cwd(), 'data', 'chat_history');
 
 class ChatHistoryService {
   constructor() {
+    // Tail of the pending update chain per session. Every read-modify-write of
+    // a session file runs after the previous one for that session settles, so
+    // two concurrent appends (a user message and the assistant's answer, or two
+    // tabs) cannot both read the old file and overwrite each other.
+    this._queues = new Map();
     this._ensureDir();
   }
 
   async _ensureDir() {
     try {
       await fs.mkdir(HISTORY_DIR, { recursive: true });
-    } catch (err) {
+    } catch {
       // directory already exists
     }
   }
 
-  _sessionPath(sessionId) {
+  _safeId(sessionId) {
     // Sanitize sessionId to prevent path traversal
-    const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '');
-    return path.join(HISTORY_DIR, `${safe}.json`);
+    return String(sessionId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+  }
+
+  _sessionPath(sessionId) {
+    return path.join(HISTORY_DIR, `${this._safeId(sessionId)}.json`);
+  }
+
+  /**
+   * Run `task` after every earlier task queued for the same session.
+   */
+  _serialize(sessionId, task) {
+    const key = this._safeId(sessionId);
+    const previous = this._queues.get(key) || Promise.resolve();
+    const run = previous.catch(() => {}).then(task);
+    const tail = run.catch(() => {});
+    this._queues.set(key, tail);
+    tail.then(() => {
+      if (this._queues.get(key) === tail) this._queues.delete(key);
+    });
+    return run;
+  }
+
+  /**
+   * Replace a session file atomically: readers see the old file or the new
+   * one, never a partially written one.
+   */
+  async _writeSession(session) {
+    await this._ensureDir();
+    const target = this._sessionPath(session.id);
+    const temporary = `${target}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+    await fs.writeFile(temporary, JSON.stringify(session, null, 2), 'utf-8');
+    try {
+      await fs.rename(temporary, target);
+    } catch (error) {
+      await fs.unlink(temporary).catch(() => {});
+      throw error;
+    }
   }
 
   async createSession(title, userId = null) {
@@ -34,8 +74,7 @@ class ChatHistoryService {
       updated: new Date().toISOString(),
       messages: []
     };
-    await this._ensureDir();
-    await fs.writeFile(this._sessionPath(sessionId), JSON.stringify(session, null, 2), 'utf-8');
+    await this._serialize(sessionId, () => this._writeSession(session));
     return session;
   }
 
@@ -43,35 +82,39 @@ class ChatHistoryService {
     try {
       const data = await fs.readFile(this._sessionPath(sessionId), 'utf-8');
       return JSON.parse(data);
-    } catch (err) {
+    } catch {
       return null;
     }
   }
 
   async addMessage(sessionId, role, content, sources = null) {
-    const session = await this.getSession(sessionId);
-    if (!session) return null;
+    return this._serialize(sessionId, async () => {
+      const session = await this.getSession(sessionId);
+      if (!session) return null;
 
-    session.messages.push({
-      role,
-      content,
-      sources: sources || undefined,
-      timestamp: new Date().toISOString()
+      session.messages.push({
+        role,
+        content,
+        sources: sources || undefined,
+        timestamp: new Date().toISOString()
+      });
+      session.updated = new Date().toISOString();
+
+      // Update title from first user message if still default
+      if (session.title === 'New Chat' && role === 'user') {
+        session.title = content.substring(0, 80) + (content.length > 80 ? '...' : '');
+      }
+
+      await this._writeSession(session);
+      return session;
     });
-    session.updated = new Date().toISOString();
-
-    // Update title from first user message if still default
-    if (session.title === 'New Chat' && role === 'user') {
-      session.title = content.substring(0, 80) + (content.length > 80 ? '...' : '');
-    }
-
-    await fs.writeFile(this._sessionPath(sessionId), JSON.stringify(session, null, 2), 'utf-8');
-    return session;
   }
 
   /**
    * List sessions, optionally filtered by userId.
-   * If userId is null, returns all sessions (backward compat for local mode).
+   * If userId is null, returns all sessions (local mode, single user).
+   * With a userId, only sessions owned by exactly that user are returned:
+   * ownerless sessions (created in local mode) belong to nobody here.
    */
   async listSessions(userId = null) {
     await this._ensureDir();
@@ -83,8 +126,7 @@ class ChatHistoryService {
       try {
         const data = await fs.readFile(path.join(HISTORY_DIR, file), 'utf-8');
         const session = JSON.parse(data);
-        // Filter by userId if provided
-        if (userId && session.userId && session.userId !== userId) continue;
+        if (userId && session.userId !== userId) continue;
         sessions.push({
           id: session.id,
           title: session.title,
@@ -93,7 +135,7 @@ class ChatHistoryService {
           updated: session.updated,
           messageCount: session.messages.length
         });
-      } catch (err) {
+      } catch {
         // skip corrupted files
       }
     }
@@ -104,12 +146,14 @@ class ChatHistoryService {
   }
 
   async deleteSession(sessionId) {
-    try {
-      await fs.unlink(this._sessionPath(sessionId));
-      return true;
-    } catch (err) {
-      return false;
-    }
+    return this._serialize(sessionId, async () => {
+      try {
+        await fs.unlink(this._sessionPath(sessionId));
+        return true;
+      } catch {
+        return false;
+      }
+    });
   }
 }
 

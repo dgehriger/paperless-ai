@@ -67,7 +67,6 @@ db.prepare(`
 const findUserByEmail = db.prepare('SELECT * FROM cf_users WHERE email = ?');
 const findUserById = db.prepare('SELECT * FROM cf_users WHERE id = ?');
 const listAllUsers = db.prepare('SELECT * FROM cf_users ORDER BY created_at DESC');
-const listApprovedUsers = db.prepare('SELECT * FROM cf_users WHERE is_approved = 1 ORDER BY name');
 
 const insertUser = db.prepare(`
   INSERT INTO cf_users (id, email, name, is_approved, is_admin, permissions)
@@ -121,9 +120,19 @@ const setUserLibraries = db.transaction((userId, libraryIds) => {
 const insertShareToken = db.prepare(`
   INSERT INTO share_tokens (token, session_id, created_by, expires_at) VALUES (?, ?, ?, ?)
 `);
-const findShareToken = db.prepare('SELECT * FROM share_tokens WHERE token = ?');
+// expires_at is an ISO-8601 timestamp ("2026-01-02T03:04:05.000Z") while
+// datetime('now') renders "2026-01-02 03:04:05". Compared as strings, 'T'
+// sorts after ' ', so a token expired earlier today still looked valid until
+// midnight. julianday() parses both forms, so compare the instants instead.
+const findShareToken = db.prepare(`
+  SELECT * FROM share_tokens
+  WHERE token = ? AND (expires_at IS NULL OR julianday(expires_at) > julianday('now'))
+`);
 const deleteShareToken = db.prepare('DELETE FROM share_tokens WHERE token = ?');
-const deleteExpiredTokens = db.prepare(`DELETE FROM share_tokens WHERE expires_at < datetime('now')`);
+const deleteExpiredTokens = db.prepare(`
+  DELETE FROM share_tokens WHERE expires_at IS NOT NULL AND julianday(expires_at) <= julianday('now')
+`);
+const listUserLibraryIds = db.prepare('SELECT user_id, library_id FROM user_libraries');
 
 // ============================================================================
 // Default permissions list
@@ -205,9 +214,15 @@ module.exports = {
   },
 
   listUsers() {
+    const libraryIds = new Map();
+    for (const row of listUserLibraryIds.all()) {
+      if (!libraryIds.has(row.user_id)) libraryIds.set(row.user_id, []);
+      libraryIds.get(row.user_id).push(row.library_id);
+    }
     return listAllUsers.all().map(u => ({
       ...u,
       permissions: JSON.parse(u.permissions || '[]'),
+      libraryIds: libraryIds.get(u.id) || [],
     }));
   },
 
@@ -272,6 +287,34 @@ module.exports = {
 
   setUserLibraries(userId, libraryIds) {
     setUserLibraries(userId, libraryIds);
+  },
+
+  /**
+   * The document scope a user's libraries grant, as a list of predicates.
+   *
+   * Each library is one predicate: a document matches it when it satisfies
+   * EVERY field the library sets (a field matches when the document's value is
+   * any of the listed names; for tags, when the document carries any listed
+   * tag). A document is in scope when it matches ANY of the user's libraries.
+   *
+   * Returns null when the user is unrestricted: no libraries assigned, or at
+   * least one assigned library that sets no field at all ("all documents").
+   */
+  getLibraryScope(userId) {
+    const libs = this.getUserLibraries(userId);
+    if (libs.length === 0) return null;
+    const scope = [];
+    for (const lib of libs) {
+      const f = lib.filters || {};
+      const predicate = {};
+      for (const key of ['storage_paths', 'tags', 'correspondents', 'document_types']) {
+        const values = Array.isArray(f[key]) ? f[key].map(v => String(v).trim()).filter(v => v) : [];
+        if (values.length > 0) predicate[key] = [...new Set(values)];
+      }
+      if (Object.keys(predicate).length === 0) return null;
+      scope.push(predicate);
+    }
+    return scope;
   },
 
   /**

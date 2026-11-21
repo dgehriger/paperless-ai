@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Paperless-AI RAG</title>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.6/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
     <style>
@@ -1207,7 +1208,31 @@
         let useAI = localStorage.getItem('useAI') !== 'false'; // Default: true
         let isConnected = false; // Track connection status
         let currentSessionId = null; // Current chat session ID
-        const paperlessUrl = '<%= paperlessUrl || "" %>';
+        // Bumped whenever the visible conversation changes (new chat, another
+        // session loaded), so an answer that arrives afterwards is recognised
+        // as belonging to the conversation it was asked in.
+        let chatGeneration = 0;
+        const paperlessUrl = <%- JSON.stringify(typeof paperlessUrl !== 'undefined' && paperlessUrl ? paperlessUrl : '').replace(/</g, '\\u003c') %>;
+
+        // Everything rendered from Markdown passes through DOMPurify: answers
+        // are generated from document text, so their HTML is untrusted. The
+        // default profile drops script, event handlers and javascript: URLs.
+        function renderMarkdown(text) {
+            return DOMPurify.sanitize(marked.parse(text || ''));
+        }
+
+        function el(tag, className, text) {
+            const node = document.createElement(tag);
+            if (className) node.className = className;
+            if (text !== undefined && text !== null) node.textContent = String(text);
+            return node;
+        }
+
+        function icon(classes) {
+            const i = document.createElement('i');
+            i.className = classes;
+            return i;
+        }
 
         // Initialize marked.js for markdown rendering
         marked.setOptions({
@@ -1277,10 +1302,10 @@
                     if (!res.ok) return;
                     const me = await res.json();
                     const perms = me.permissions || [];
-                    const isAdmin = me.is_admin;
+                    const isAdmin = me.isAdmin;
                     // Hide RAG settings link if user lacks rag_settings permission
                     if (!isAdmin && !perms.includes('rag_settings')) {
-                        const ragSettingsLink = document.querySelector('a[href="/rag-settings"]');
+                        const ragSettingsLink = document.getElementById('rag-settings-link');
                         if (ragSettingsLink) ragSettingsLink.style.display = 'none';
                     }
                     // Hide history toggle if user lacks history permission
@@ -1329,9 +1354,16 @@
                 const allCheckbox = allLabel.querySelector('#sp-all');
 
                 paths.forEach(p => {
+                    // Path names come from Paperless: build the checkbox from
+                    // DOM properties and append the name as text, never HTML.
                     const label = document.createElement('label');
-                    const isDefault = (p.toLowerCase() === 'default');
-                    label.innerHTML = `<input type="checkbox" value="${p.replace(/"/g, '&quot;')}" class="sp-checkbox"${isDefault ? ' checked' : ''}> ${p}`;
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'sp-checkbox';
+                    checkbox.value = p;
+                    checkbox.checked = (p.toLowerCase() === 'default');
+                    label.appendChild(checkbox);
+                    label.appendChild(document.createTextNode(' ' + p));
                     container.appendChild(label);
                 });
 
@@ -1439,6 +1471,7 @@
             // Prepare request
             const endpoint = '/api/rag/ask';
             const selectedPaths = getSelectedStoragePaths();
+            const askedInGeneration = chatGeneration;
             
             fetch(endpoint, {
                 method: 'POST',
@@ -1462,9 +1495,17 @@
                 return response.json();
             })
             .then(data => {
+                // The user moved to another conversation while this answer
+                // was pending. The server has stored it in the conversation it
+                // was asked in; showing it here would mix two conversations.
+                if (askedInGeneration !== chatGeneration) {
+                    showShareToast('An earlier answer arrived; it is saved in its own conversation.');
+                    return;
+                }
+
                 // Hide typing indicator
                 typingIndicator.classList.add('hidden');
-                
+
                 // Track session ID
                 if (data.sessionId) {
                     currentSessionId = data.sessionId;
@@ -1480,6 +1521,8 @@
                 updateStatusIndicator('online', 'Online');
             })
             .catch(error => {
+                if (askedInGeneration !== chatGeneration) return;
+
                 // Hide typing indicator
                 typingIndicator.classList.add('hidden');
                 
@@ -1503,69 +1546,100 @@
             scrollToBottom();
         }
 
-        function addAssistantMessage(message, sources = [], modelUsed = null) {
+        function addAssistantMessage(message, sources = []) {
             const messageElement = document.createElement('div');
             messageElement.className = 'message assistant';
-            
-            // Format message with marked.js for proper markdown rendering
-            let formattedMessage = marked.parse(message);
-            
-            let html = `<button class="copy-btn" title="Copy to clipboard"><i class="fas fa-copy"></i></button>`;
-            html += `<div class="markdown">${formattedMessage}</div>`;
-            
-            // Add sources if available — new card layout with thumbnails
+
+            const copyButton = el('button', 'copy-btn');
+            copyButton.title = 'Copy to clipboard';
+            copyButton.appendChild(icon('fas fa-copy'));
+            messageElement.appendChild(copyButton);
+
+            // Format message with marked.js, then sanitize the resulting HTML
+            const markdown = el('div', 'markdown');
+            markdown.innerHTML = renderMarkdown(message);
+            messageElement.appendChild(markdown);
+
+            // Add sources if available — card layout with thumbnails. Every
+            // value here (title, correspondent, date) comes from documents, so
+            // it is set as text and the handlers are bound, not inlined.
             if (sources && sources.length > 0) {
-                html += `<div class="sources-container">
-                            <div class="sources-title">
-                                <span>Sources (${sources.length})</span>
-                                <button class="sources-toggle" data-expanded="false">
-                                    Show <i class="fas fa-chevron-down"></i>
-                                </button>
-                            </div>
-                            <div class="sources-list">`;
-                
+                const sourcesContainer = el('div', 'sources-container');
+                const sourcesTitle = el('div', 'sources-title');
+                sourcesTitle.appendChild(el('span', null, `Sources (${sources.length})`));
+                const toggle = el('button', 'sources-toggle', 'Show ');
+                toggle.dataset.expanded = 'false';
+                toggle.appendChild(icon('fas fa-chevron-down'));
+                sourcesTitle.appendChild(toggle);
+                sourcesContainer.appendChild(sourcesTitle);
+                const sourcesList = el('div', 'sources-list');
+
                 sources.forEach((source, index) => {
-                    const rawDate = source.date;
                     let dateStr = 'Unknown';
-                    if (rawDate) {
-                        try {
-                            const d = new Date(rawDate);
-                            dateStr = d.toISOString().slice(0, 10); // yyyy-mm-dd
-                        } catch { dateStr = rawDate; }
+                    if (source.date) {
+                        const d = new Date(source.date);
+                        dateStr = isNaN(d.getTime()) ? String(source.date) : d.toISOString().slice(0, 10);
                     }
-                    const hidden = ' hidden';
-                    const docId = source.doc_id;
-                    const docLink = (paperlessUrl && docId)
-                        ? `${paperlessUrl}/documents/${docId}/details`
-                        : '#';
-                    const thumbUrl = docId ? `/api/documents/${docId}/thumb` : '';
-                    
-                    html += `
-                        <div class="source-card${hidden}" data-index="${index}" data-doc-id="${docId || ''}">
-                            <div class="source-thumb" onclick="openDocViewer(${docId}, '${(source.title || '').replace(/'/g, "\\'")}')">
-                                ${thumbUrl
-                                    ? `<img src="${thumbUrl}" alt="Thumbnail" loading="lazy">`
-                                    : `<span class="thumb-placeholder"><i class="fas fa-file-alt"></i></span>`
-                                }
-                            </div>
-                            <div class="source-info" onclick="openDocViewer(${docId}, '${(source.title || '').replace(/'/g, "\\'")}')">
-                                <div class="source-info-title">${source.title || 'Unknown Title'}</div>
-                                <div class="source-info-meta">
-                                    <span><i class="fas fa-calendar-alt"></i> ${dateStr}</span>
-                                    <span><i class="fas fa-user"></i> ${source.correspondent || 'Unknown'}</span>
-                                </div>
-                            </div>
-                            <div class="source-actions">
-                                ${docLink !== '#' ? `<a href="${docLink}" target="_blank" rel="noopener noreferrer" class="source-action-btn" title="Open in Paperless"><i class="fas fa-external-link-alt"></i></a>` : ''}
-                            </div>
-                        </div>
-                    `;
+                    const docId = Number.isInteger(Number(source.doc_id)) && Number(source.doc_id) > 0
+                        ? Number(source.doc_id) : null;
+                    const title = source.title || 'Unknown Title';
+
+                    const card = el('div', 'source-card hidden');
+                    card.dataset.index = String(index);
+                    card.dataset.docId = docId ? String(docId) : '';
+
+                    const thumb = el('div', 'source-thumb');
+                    if (docId) {
+                        const img = document.createElement('img');
+                        img.src = `/api/documents/${docId}/thumb`;
+                        img.alt = 'Thumbnail';
+                        img.loading = 'lazy';
+                        thumb.appendChild(img);
+                    } else {
+                        const placeholder = el('span', 'thumb-placeholder');
+                        placeholder.appendChild(icon('fas fa-file-alt'));
+                        thumb.appendChild(placeholder);
+                    }
+
+                    const info = el('div', 'source-info');
+                    info.appendChild(el('div', 'source-info-title', title));
+                    const meta = el('div', 'source-info-meta');
+                    const dateSpan = el('span');
+                    dateSpan.appendChild(icon('fas fa-calendar-alt'));
+                    dateSpan.appendChild(document.createTextNode(' ' + dateStr));
+                    const corrSpan = el('span');
+                    corrSpan.appendChild(icon('fas fa-user'));
+                    corrSpan.appendChild(document.createTextNode(' ' + (source.correspondent || 'Unknown')));
+                    meta.appendChild(dateSpan);
+                    meta.appendChild(corrSpan);
+                    info.appendChild(meta);
+
+                    if (docId) {
+                        thumb.addEventListener('click', () => openDocViewer(docId, title));
+                        info.addEventListener('click', () => openDocViewer(docId, title));
+                    }
+
+                    const actions = el('div', 'source-actions');
+                    if (paperlessUrl && docId) {
+                        const link = el('a', 'source-action-btn');
+                        link.href = `${paperlessUrl}/documents/${docId}/details`;
+                        link.target = '_blank';
+                        link.rel = 'noopener noreferrer';
+                        link.title = 'Open in Paperless';
+                        link.appendChild(icon('fas fa-external-link-alt'));
+                        actions.appendChild(link);
+                    }
+
+                    card.appendChild(thumb);
+                    card.appendChild(info);
+                    card.appendChild(actions);
+                    sourcesList.appendChild(card);
                 });
-                
-                html += `</div></div>`;
+
+                sourcesContainer.appendChild(sourcesList);
+                messageElement.appendChild(sourcesContainer);
             }
-            
-            messageElement.innerHTML = html;
+
             // Store raw text for copy
             messageElement.dataset.rawText = message;
             chatContainer.appendChild(messageElement);
@@ -1654,6 +1728,8 @@
         });
 
         function startNewChat() {
+            chatGeneration++;
+            typingIndicator.classList.add('hidden');
             currentSessionId = null;
             chatContainer.innerHTML = '<div class="system-message">Welcome to Paperless-AI RAG Chat! Ask a question about your documents.</div>';
             // Remove active state from all history items
@@ -1677,11 +1753,14 @@
                     item.className = 'history-item' + (session.id === currentSessionId ? ' active' : '');
                     item.dataset.sessionId = session.id;
                     const date = new Date(session.updated).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-                    item.innerHTML = `
-                        <button class="history-item-delete" title="Delete" data-id="${session.id}"><i class="fas fa-trash"></i></button>
-                        <div class="history-item-title">${session.title}</div>
-                        <div class="history-item-meta">${session.messageCount} messages &middot; ${date}</div>
-                    `;
+                    // The title is the user's first question: text, never HTML.
+                    const deleteButton = el('button', 'history-item-delete');
+                    deleteButton.title = 'Delete';
+                    deleteButton.dataset.id = session.id;
+                    deleteButton.appendChild(icon('fas fa-trash'));
+                    item.appendChild(deleteButton);
+                    item.appendChild(el('div', 'history-item-title', session.title));
+                    item.appendChild(el('div', 'history-item-meta', `${session.messageCount} messages \u00b7 ${date}`));
                     
                     item.addEventListener('click', (e) => {
                         if (e.target.closest('.history-item-delete')) return;
@@ -1712,7 +1791,9 @@
                 const response = await fetch(`/api/rag/history/${sessionId}`);
                 if (!response.ok) return;
                 const session = await response.json();
-                
+
+                chatGeneration++;
+                typingIndicator.classList.add('hidden');
                 currentSessionId = sessionId;
                 chatContainer.innerHTML = '<div class="system-message">Welcome to Paperless-AI RAG Chat! Ask a question about your documents.</div>';
                 
@@ -1745,27 +1826,44 @@
 
         // ── Document Viewer Popup ──
         function openDocViewer(docId, title) {
-            if (!docId) return;
+            const id = Number(docId);
+            if (!Number.isInteger(id) || id <= 0) return;
             // Remove any existing overlay
             closeDocViewer();
-            const overlay = document.createElement('div');
-            overlay.className = 'doc-viewer-overlay';
+            const overlay = el('div', 'doc-viewer-overlay');
             overlay.id = 'doc-viewer-overlay';
-            overlay.innerHTML = `
-                <div class="doc-viewer">
-                    <div class="doc-viewer-header">
-                        <span class="doc-viewer-title">${title || 'Document'}</span>
-                        <div class="doc-viewer-actions">
-                            <a href="/api/documents/${docId}/download" class="source-action-btn" title="Download"><i class="fas fa-download"></i></a>
-                            <button onclick="printDoc()" class="source-action-btn" title="Print"><i class="fas fa-print"></i></button>
-                            <button onclick="closeDocViewer()" class="source-action-btn" title="Close"><i class="fas fa-times"></i></button>
-                        </div>
-                    </div>
-                    <div class="doc-viewer-body">
-                        <iframe id="doc-viewer-iframe" src="/api/documents/${docId}/preview"></iframe>
-                    </div>
-                </div>
-            `;
+
+            const viewer = el('div', 'doc-viewer');
+            const header = el('div', 'doc-viewer-header');
+            header.appendChild(el('span', 'doc-viewer-title', title || 'Document'));
+            const actions = el('div', 'doc-viewer-actions');
+
+            const download = el('a', 'source-action-btn');
+            download.href = `/api/documents/${id}/download`;
+            download.title = 'Download';
+            download.appendChild(icon('fas fa-download'));
+            const print = el('button', 'source-action-btn');
+            print.title = 'Print';
+            print.appendChild(icon('fas fa-print'));
+            print.addEventListener('click', printDoc);
+            const close = el('button', 'source-action-btn');
+            close.title = 'Close';
+            close.appendChild(icon('fas fa-times'));
+            close.addEventListener('click', closeDocViewer);
+            actions.appendChild(download);
+            actions.appendChild(print);
+            actions.appendChild(close);
+            header.appendChild(actions);
+
+            const body = el('div', 'doc-viewer-body');
+            const iframe = document.createElement('iframe');
+            iframe.id = 'doc-viewer-iframe';
+            iframe.src = `/api/documents/${id}/preview`;
+            body.appendChild(iframe);
+
+            viewer.appendChild(header);
+            viewer.appendChild(body);
+            overlay.appendChild(viewer);
             overlay.addEventListener('click', (e) => {
                 if (e.target === overlay) closeDocViewer();
             });
@@ -1801,7 +1899,8 @@
                     const res = await fetch(`/api/rag/history/${currentSessionId}/share`, { method: 'POST' });
                     if (!res.ok) throw new Error('Failed to create share link');
                     const data = await res.json();
-                    await navigator.clipboard.writeText(data.shareUrl);
+                    // The server returns a path; recipients need the full URL.
+                    await navigator.clipboard.writeText(new URL(data.shareUrl, window.location.origin).href);
                     showShareToast('Link copied to clipboard!');
                 } catch (err) {
                     console.error('Share error:', err);
@@ -1825,7 +1924,9 @@
 
         // ── Shared Session Loading ──
         (function loadSharedSession() {
-            const sharedSession = <%- typeof sharedSession !== 'undefined' && sharedSession ? JSON.stringify(sharedSession) : 'null' %>;
+            // Escaped for a <script> element: a saved question containing
+            // "</script>" must not end this block.
+            const sharedSession = <%- typeof sharedSession !== 'undefined' && sharedSession ? JSON.stringify(sharedSession).replace(/</g, '\\u003c').replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029') : 'null' %>;
             const readOnly = <%= typeof readOnly !== 'undefined' && readOnly ? 'true' : 'false' %>;
             if (!sharedSession) return;
             // Render shared messages

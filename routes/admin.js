@@ -3,7 +3,7 @@
 const express = require('express');
 const router = express.Router();
 const userModel = require('../models/userModel');
-const { requireAdmin, AUTH_MODE } = require('../middleware/cfAuth');
+const { requireAdmin } = require('../middleware/cfAuth');
 
 // All admin routes require admin role
 router.use(requireAdmin);

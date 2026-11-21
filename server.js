@@ -436,7 +436,7 @@ const authRoutes = require('./routes/auth');
 const ragRoutes = require('./routes/rag');
 const adminRoutes = require('./routes/admin');
 const proxyRoutes = require('./routes/proxy');
-const { authenticateJWT, isAuthenticated, requirePermission, AUTH_MODE } = require('./middleware/cfAuth');
+const { AUTH_MODE, landingPath } = require('./middleware/cfAuth');
 
 // Mount admin routes (CF Access mode)
 app.use('/api/admin', adminRoutes);
@@ -467,7 +467,9 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
       res.render('rag', {
         title: session.title || 'Shared Conversation',
         paperlessUrl: paperlessPublicUrl,
-        sharedSession: JSON.stringify(session),
+        // The template serializes it (escaped for a <script> context);
+        // serializing here as well would hand the page a string.
+        sharedSession: session,
         readOnly: true,
         authMode: AUTH_MODE,
       });
@@ -528,6 +530,16 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
  */
 app.get('/', async (req, res) => {
   try {
+    if (AUTH_MODE === 'cf_access' && req.cfUser) {
+      const target = landingPath(req.cfUser);
+      if (!target) {
+        return res.status(403).render('error', {
+          title: 'No features assigned',
+          message: 'Your account is approved but has no permissions yet. Ask an administrator to grant you access.',
+        });
+      }
+      return res.redirect(target);
+    }
     res.redirect('/dashboard');
   } catch (error) {
     console.error('[ERROR] in root route:', error);

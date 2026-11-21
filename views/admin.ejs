@@ -137,9 +137,10 @@
             const role = u.is_admin
                 ? '<span class="badge badge-blue">Admin</span>'
                 : '<span class="badge">User</span>';
-            const perms = (u.permissions || []).map(p => `<span class="perm-chip selected">${p}</span>`).join(' ');
+            const perms = (u.permissions || []).map(p => `<span class="perm-chip selected">${escHtml(p)}</span>`).join(' ');
+            const assigned = allLibraries.filter(l => (u.libraryIds || []).includes(l.id)).map(l => l.name);
             const userLibs = '<span class="text-sm text-gray-500">' +
-                (allLibraries.filter(l => u._libraryIds && u._libraryIds.includes(l.id)).map(l => l.name).join(', ') || '—') +
+                (assigned.length ? escHtml(assigned.join(', ')) : 'All documents') +
                 '</span>';
             const lastLogin = u.last_login ? new Date(u.last_login).toLocaleDateString() : '<span class="badge badge-blue">Pre-registered</span>';
 
@@ -171,7 +172,9 @@
             if (f.tags?.length) filterParts.push('Tags: ' + f.tags.join(', '));
             if (f.correspondents?.length) filterParts.push('Correspondents: ' + f.correspondents.join(', '));
             if (f.document_types?.length) filterParts.push('Types: ' + f.document_types.join(', '));
-            const filtersStr = filterParts.join(' | ') || '<span class="text-gray-400">No filters (all documents)</span>';
+            const filtersStr = filterParts.length
+                ? escHtml(filterParts.join(' | '))
+                : '<span class="text-gray-400">No filters (all documents)</span>';
 
             return `<tr>
                 <td class="font-medium">${escHtml(l.name)}</td>
@@ -218,9 +221,13 @@
             </div>
             <div class="form-group">
                 <label>Libraries</label>
+                <p class="text-sm text-gray-500">A user with no library sees every document. With libraries, only documents that match one of them.</p>
                 <div class="flex flex-wrap gap-1" id="lib-chips">
                     ${allLibraries.map(l => {
-                        return `<span class="perm-chip" data-lib="${l.id}" onclick="this.classList.toggle('selected')">${escHtml(l.name)}</span>`;
+                        // Start from the user's current assignment: saving
+                        // replaces it with exactly the chips selected here.
+                        const sel = (user.libraryIds || []).includes(l.id) ? 'selected' : '';
+                        return `<span class="perm-chip ${sel}" data-lib="${escHtml(l.id)}" onclick="this.classList.toggle('selected')">${escHtml(l.name)}</span>`;
                     }).join('')}
                 </div>
             </div>
@@ -408,10 +415,14 @@
         document.getElementById('modal-container').innerHTML = '';
     }
 
+    // Escapes for text and for quoted attribute values alike.
     function escHtml(str) {
-        const div = document.createElement('div');
-        div.textContent = str || '';
-        return div.innerHTML;
+        return String(str ?? '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
 
     // Init
