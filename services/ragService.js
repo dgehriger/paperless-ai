@@ -143,8 +143,7 @@ class RagService {
     const q = question.toLowerCase().trim();
     if (q.length >= 80) return false;
 
-    const words = q.split(/\s+/).filter(Boolean);
-    const ref = '(that|this|it|those|these|them|the above|your answer|the answer|the (?:previous|last) answer|das|dies|es|die antwort|deine antwort)';
+const ref = '(that|this|it|those|these|them|the above|your answer|the answer|the (?:previous|last) answer|das|dies|es|die antwort|deine antwort)';
     // The reference must close the question ("summarize that", "fasse das
     // zusammen"), so "summarize this year's invoices" is still a search.
     const endsWithReference = new RegExp(`\\b${ref}(\\s+(again|please|zusammen|kurz|nochmal|bitte))?\\W*$`);
@@ -155,10 +154,33 @@ class RagService {
     const transformVerb = /^(please\s+|bitte\s+|can you\s+|could you\s+|kannst du\s+|könntest du\s+)?(summari[sz]e|translate|rewrite|rephrase|shorten|condense|expand|reformat|format|convert|repeat|explain|elaborate on|clarify|show|display|present|fasse|übersetze|formuliere|kürze|erkläre|wiederhole|zeige)\b/;
     const transformPhrase = /\b(as a table|in a table|as a list|as bullet points|in bullet points|in english|in german|in french|auf deutsch|auf englisch|als tabelle|tabellarisch|in tabellenform|als liste|in stichpunkten)\b/;
 
+    // A format request on its own ("as a table", "in English please").
+    const bareFormat = new RegExp(`^(please\\s+|bitte\\s+)?${transformPhrase.source}(\\s+(please|bitte))?\\W*$`);
+
     if (standalone.test(q)) return true;
-    if (transformPhrase.test(q) && (words.length <= 4 || referenceBeforeFormat.test(q))) return true;
+    if (bareFormat.test(q) || (transformPhrase.test(q) && referenceBeforeFormat.test(q))) return true;
     if (transformVerb.test(q) && endsWithReference.test(q)) return true;
     return false;
+  }
+
+  /**
+   * Context text for a list of sources, in the RAG service's own format.
+   * Used when sources were dropped after retrieval, so that the context the
+   * model sees holds exactly the sources that are returned.
+   */
+  _contextFromSources(sources) {
+    return sources.map((s, i) => `Document ${i + 1}: ${s.title}\n${s.snippet || ''}\n\n`).join('');
+  }
+
+  /**
+   * Apply `authorizeSources` to one retrieval result. Without it the result is
+   * returned unchanged; with it, denied sources are removed from both the
+   * sources and the context.
+   */
+  async _authorize(contextData, authorizeSources) {
+    if (!authorizeSources) return contextData;
+    const sources = await authorizeSources(contextData.sources || []);
+    return { ...contextData, sources, context: this._contextFromSources(sources) };
   }
 
   /**
@@ -338,7 +360,14 @@ class RagService {
    * @param {string} question - The question to ask
    * @returns {Promise<{answer: string, sources: Array}>} - AI response and source documents
    */
-  async askQuestion(question, chatHistory = [], storagePaths = [], libraries = null) {
+  /**
+   * @param {Function|null} authorizeSources - async (sources) => allowed sources.
+   *   The index's metadata can lag behind Paperless (a document moved out of a
+   *   library keeps its old storage path until re-indexed), so a restricted
+   *   caller's sources are re-checked against Paperless before their content
+   *   is fetched or shown.
+   */
+  async askQuestion(question, chatHistory = [], storagePaths = [], libraries = null, authorizeSources = null) {
     try {
       // Load system prompt once — used for both query decomposition and answer generation
       const savedPrompt = await this.getSystemPrompt();
@@ -373,6 +402,7 @@ class RagService {
           const response = await axios.post(`${this.baseUrl}/context`, contextRequest);
           contextData = response.data;
         }
+        contextData = await this._authorize(contextData, authorizeSources);
         enhancedContext = contextData.context || '';
         sources = contextData.sources || [];
         
@@ -409,7 +439,8 @@ class RagService {
             try {
               const contextRequest = this._contextRequest(refinedQ, 8, storagePaths, libraries);
               const resp = await axios.post(`${this.baseUrl}/context`, contextRequest);
-              for (const src of (resp.data.sources || [])) {
+              const refined = await this._authorize(resp.data, authorizeSources);
+              for (const src of (refined.sources || [])) {
                 if (!existingDocIds.has(src.doc_id)) {
                   existingDocIds.add(src.doc_id);
                   newSources.push(src);

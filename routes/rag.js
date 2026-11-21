@@ -10,7 +10,7 @@ const chatHistoryService = require('../services/chatHistoryService');
 const paperlessService = require('../services/paperlessService');
 const userModel = require('../models/userModel');
 const { AUTH_MODE } = require('../middleware/cfAuth');
-const { getScope, assertDocumentAccess, documentNames, AccessDeniedError } = require('../services/accessService');
+const { getScope, assertDocumentAccess, documentNames, filterSources, AccessDeniedError } = require('../services/accessService');
 
 /**
  * Get the current user's ID (or null in local mode)
@@ -85,7 +85,8 @@ router.post('/search', async (req, res) => {
     if (scope) filters.libraries = scope;
 
     const results = await ragService.search(query, filters);
-    res.json(results);
+    // The index can lag behind Paperless; re-check against current metadata.
+    res.json(scope ? await filterSources(req, results) : results);
   } catch (error) {
     console.error('Error in /api/rag/search:', error);
     res.status(500).json({ error: error.message || 'Internal server error' });
@@ -152,7 +153,8 @@ router.post('/ask', async (req, res) => {
     // Save user message to history
     await chatHistoryService.addMessage(activeSessionId, 'user', question);
 
-    const result = await ragService.askQuestion(question, chatHistory, storagePaths, scope);
+    const authorizeSources = scope ? (sources) => filterSources(req, sources) : null;
+    const result = await ragService.askQuestion(question, chatHistory, storagePaths, scope, authorizeSources);
 
     // Only save successful answers to history (not error fallback messages)
     const isError = result.answer.startsWith('An error occurred') || result.answer.startsWith('This information is not contained');

@@ -64,6 +64,20 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Document thumbnails were once cached as public/images/<id>.png, where this
+// static handler served them to anyone. They are cached under data/ now;
+// refuse the old URLs and remove what is left of the old cache.
+const LEGACY_THUMBNAIL = /^\/images\/\d+\.png$/i;
+app.use((req, res, next) => (LEGACY_THUMBNAIL.test(req.path) ? res.status(404).end() : next()));
+try {
+  const fsSync = require('fs');
+  const legacyDir = path.join(__dirname, 'public', 'images');
+  for (const name of fsSync.existsSync(legacyDir) ? fsSync.readdirSync(legacyDir) : []) {
+    if (/^\d+\.png$/i.test(name)) fsSync.unlinkSync(path.join(legacyDir, name));
+  }
+} catch (error) {
+  console.warn('[WARN] Could not clear the legacy thumbnail cache:', error.message);
+}
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 

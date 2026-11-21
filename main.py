@@ -481,6 +481,28 @@ class DataManager:
                 logger.error(f"Request error: {str(e)}")
                 raise Exception(f"API request failed: {str(e)}")
         
+        # Names are resolved once per ID per run: most documents share their
+        # correspondent, tags, type and path, and an incremental run walks the
+        # whole archive.
+        name_cache = {}
+
+        def lookup_name(kind, item_id):
+            key = (kind, item_id)
+            if key not in name_cache:
+                name = ""
+                try:
+                    response = requests.get(
+                        f"{self.paperless_url}/api/{kind}/{item_id}/",
+                        headers=self._get_headers(),
+                        timeout=10
+                    )
+                    if response.status_code == 200:
+                        name = response.json().get("name", "")
+                except Exception:
+                    pass
+                name_cache[key] = name
+            return name_cache[key]
+
         # Process documents to extract required fields
         processed_docs = []
         for doc in tqdm(documents, desc="Processing documents"):
@@ -500,59 +522,11 @@ class DataManager:
             else:
                 content = doc.get("content", "")
             
-            # Get correspondent name
-            correspondent = ""
-            if doc.get("correspondent"):
-                corr_id = doc["correspondent"]
-                corr_response = requests.get(
-                    f"{self.paperless_url}/api/correspondents/{corr_id}/",
-                    headers=self._get_headers(),
-                    timeout=10
-                )
-                
-                if corr_response.status_code == 200:
-                    correspondent = corr_response.json().get("name", "")
-            
-            # Get tag names
-            tags = []
-            if doc.get("tags"):
-                for tag_id in doc["tags"]:
-                    tag_response = requests.get(
-                        f"{self.paperless_url}/api/tags/{tag_id}/",
-                        headers=self._get_headers(),
-                        timeout=10
-                    )
-                    
-                    if tag_response.status_code == 200:
-                        tags.append(tag_response.json().get("name", ""))
-            
-            # Get document type name (library filters restrict by it)
-            document_type = ""
-            if doc.get("document_type"):
-                try:
-                    dt_response = requests.get(
-                        f"{self.paperless_url}/api/document_types/{doc['document_type']}/",
-                        headers=self._get_headers(),
-                        timeout=10
-                    )
-                    if dt_response.status_code == 200:
-                        document_type = dt_response.json().get("name", "")
-                except Exception:
-                    pass
-
-            # Get storage path name
-            storage_path = ""
-            if doc.get("storage_path"):
-                try:
-                    sp_response = requests.get(
-                        f"{self.paperless_url}/api/storage_paths/{doc['storage_path']}/",
-                        headers=self._get_headers(),
-                        timeout=10
-                    )
-                    if sp_response.status_code == 200:
-                        storage_path = sp_response.json().get("name", "")
-                except Exception:
-                    pass
+            correspondent = lookup_name("correspondents", doc["correspondent"]) if doc.get("correspondent") else ""
+            tags = [name for name in (lookup_name("tags", t) for t in (doc.get("tags") or [])) if name]
+            # Library filters restrict by document type and storage path names
+            document_type = lookup_name("document_types", doc["document_type"]) if doc.get("document_type") else ""
+            storage_path = lookup_name("storage_paths", doc["storage_path"]) if doc.get("storage_path") else ""
             
             # Create processed document
             processed_doc = {
@@ -731,8 +705,10 @@ class DataManager:
                     collection_count = collection.count()
                     logger.info(f"ChromaDB collection contains {collection_count} documents")
                     
-                    # If collection is empty but we have documents, force recreate
-                    if collection_count == 0 and self.documents and len(self.documents) > 0:
+                    # If collection is empty but we have documents, force recreate --
+                    # unless it is empty because every embedding failed, which the
+                    # retry below handles without rebuilding anything
+                    if collection_count == 0 and self.documents and len(self.documents) > 0 and not self.embedding_failed_ids:
                         logger.warning("Empty ChromaDB collection found but documents exist. Forcing update.")
                         force_update = True
                         # Recreate the collection below in the "else" block
@@ -903,22 +879,24 @@ class SearchEngine:
             logger.error("Documents not loaded or empty")
             valid = False
         
-        # Check ChromaDB
+        # Check ChromaDB. Semantic search is optional: during an embedding
+        # outage the collection is missing or empty, and keyword search over
+        # BM25 must keep working rather than the whole engine reporting 503.
+        semantic_ready = False
         if not self.collection:
-            logger.error("ChromaDB collection not initialized")
-            valid = False
+            logger.warning("ChromaDB collection not initialized; semantic search unavailable")
         else:
             try:
                 # Check if collection is accessible
                 collection_count = self.collection.count()
                 if collection_count == 0:
-                    logger.error("ChromaDB collection is empty")
-                    valid = False
+                    logger.warning("ChromaDB collection is empty; semantic search unavailable")
                 else:
+                    semantic_ready = True
                     logger.info(f"ChromaDB collection contains {collection_count} documents")
             except Exception as e:
                 logger.error(f"Error accessing ChromaDB collection: {str(e)}")
-                valid = False
+        global_state.system_status.chroma_ready = semantic_ready
         
         # Check BM25
         if not self.bm25 or not self.tokenized_corpus or len(self.tokenized_corpus) == 0:
@@ -1326,12 +1304,9 @@ class SearchEngine:
                 return self.semantic_search(query, top_k, accept)
                 
         if not self.collection:
-            logger.error("ChromaDB collection not available for hybrid search")
-            self.data_manager.setup_chroma_collection()  # Try to set up ChromaDB
-            if not self.collection:
-                # Fall back to just keyword search if semantic fails
-                logger.warning("Falling back to keyword search only")
-                return self.keyword_search(query, top_k, accept)
+            # Embeddings are retried by indexing runs, not per search
+            logger.warning("ChromaDB collection not available, falling back to keyword search only")
+            return self.keyword_search(query, top_k, accept)
             
         # Get results from both search methods
         try:
@@ -1656,8 +1631,9 @@ def get_search_engine():
     # Validate the search engine state if it's marked as initialized
     if global_state.search_engine.is_initialized:
         # Quick validation of BM25 and collection
-        if (not global_state.search_engine.bm25_initialized or 
-            not global_state.search_engine.collection):
+        # A missing collection is tolerated (keyword-only search); only a
+        # missing BM25 index means the engine cannot answer at all.
+        if not global_state.search_engine.bm25_initialized:
             logger.error("Search engine components are missing, trying to reinitialize")
             try:
                 # Try to reinitialize without force update to preserve existing data

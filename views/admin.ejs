@@ -17,7 +17,8 @@
         .badge-yellow { background: #fef3c7; color: #92400e; }
         .badge-blue { background: #dbeafe; color: #1e40af; }
         .badge-red { background: #fee2e2; color: #991b1b; }
-        .perm-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; background: #f3f4f6; border: 1px solid #e5e7eb; cursor: pointer; user-select: none; }
+        .perm-chip { display: inline-flex; align-items: center; gap: 0.25rem; padding: 0.125rem 0.5rem; border-radius: 0.375rem; font-size: 0.75rem; font-family: inherit; color: inherit; background: #f3f4f6; border: 1px solid #e5e7eb; cursor: pointer; user-select: none; }
+        button.perm-chip:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
         .perm-chip.selected { background: #dbeafe; border-color: #93c5fd; color: #1e40af; }
         .lib-filter-row { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
         table { width: 100%; border-collapse: collapse; }
@@ -215,7 +216,7 @@
                 <div class="flex flex-wrap gap-1" id="perm-chips">
                     ${allPermissions.map(p => {
                         const sel = user.permissions.includes(p) ? 'selected' : '';
-                        return `<span class="perm-chip ${sel}" data-perm="${p}" onclick="this.classList.toggle('selected')">${p}</span>`;
+                        return chipButton(sel === 'selected', `data-perm="${escHtml(p)}"`, escHtml(p));
                     }).join('')}
                 </div>
             </div>
@@ -227,7 +228,7 @@
                         // Start from the user's current assignment: saving
                         // replaces it with exactly the chips selected here.
                         const sel = (user.libraryIds || []).includes(l.id) ? 'selected' : '';
-                        return `<span class="perm-chip ${sel}" data-lib="${escHtml(l.id)}" onclick="this.classList.toggle('selected')">${escHtml(l.name)}</span>`;
+                        return chipButton(sel === 'selected', `data-lib="${escHtml(l.id)}"`, escHtml(l.name));
                     }).join('')}
                 </div>
             </div>
@@ -286,7 +287,7 @@
                 <div class="flex flex-wrap gap-1" id="prereg-perm-chips">
                     ${allPermissions.map(p => {
                         const defaultOn = ['rag_chat', 'history'].includes(p);
-                        return `<span class="perm-chip ${defaultOn ? 'selected' : ''}" data-perm="${p}" onclick="this.classList.toggle('selected')">${p}</span>`;
+                        return chipButton(defaultOn, `data-perm="${escHtml(p)}"`, escHtml(p));
                     }).join('')}
                 </div>
             </div>
@@ -294,7 +295,7 @@
                 <label>Libraries</label>
                 <div class="flex flex-wrap gap-1" id="prereg-lib-chips">
                     ${allLibraries.map(l => {
-                        return `<span class="perm-chip" data-lib="${l.id}" onclick="this.classList.toggle('selected')">${escHtml(l.name)}</span>`;
+                        return chipButton(false, `data-lib="${escHtml(l.id)}"`, escHtml(l.name));
                     }).join('')}
                 </div>
                 ${allLibraries.length === 0 ? '<span class="text-sm text-gray-400">No libraries defined yet</span>' : ''}
@@ -413,6 +414,17 @@
     }
     function closeModal() {
         document.getElementById('modal-container').innerHTML = '';
+    }
+
+    // A toggle chip: a native button, so it takes keyboard focus and
+    // activates with Enter and Space; aria-pressed carries the state.
+    function chipButton(selected, dataAttr, label) {
+        return `<button type="button" class="perm-chip ${selected ? 'selected' : ''}" ${dataAttr} aria-pressed="${selected ? 'true' : 'false'}" onclick="toggleChip(this)">${label}</button>`;
+    }
+
+    function toggleChip(chip) {
+        const selected = chip.classList.toggle('selected');
+        chip.setAttribute('aria-pressed', selected ? 'true' : 'false');
     }
 
     // Escapes for text and for quoted attribute values alike.

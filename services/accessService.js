@@ -141,6 +141,26 @@ async function assertDocumentAccess(req, docOrId) {
 }
 
 /**
+ * The retrieval results (objects with a doc_id) the request's user may see,
+ * judged by Paperless's current metadata rather than the index's copy. A
+ * document that cannot be fetched is dropped.
+ */
+async function filterSources(req, sources) {
+  const scope = getScope(req);
+  if (!scope) return sources;
+  const verdicts = await Promise.all(sources.map(async (source) => {
+    if (!source || !source.doc_id) return false;
+    try {
+      const doc = await paperlessService.getDocument(source.doc_id);
+      return matchesScope(await documentNames(doc), scope);
+    } catch {
+      return false;
+    }
+  }));
+  return sources.filter((_, i) => verdicts[i]);
+}
+
+/**
  * The subset of Paperless documents the request's user may see.
  */
 async function filterDocuments(req, docs) {
@@ -159,5 +179,6 @@ module.exports = {
   matchesScope,
   assertDocumentAccess,
   filterDocuments,
+  filterSources,
   documentNames,
 };

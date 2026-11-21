@@ -147,10 +147,17 @@ let PUBLIC_ROUTES = [
   '/shared/',
 ];
 
+// In cf_access mode the setup wizard is not public: it writes the
+// configuration and restarts the app, so it needs a verified administrator
+// (see ROUTE_PERMISSIONS). Local mode keeps it public for the first-run bootstrap.
+const EFFECTIVE_PUBLIC_ROUTES = AUTH_MODE === 'cf_access'
+  ? PUBLIC_ROUTES.filter(route => route !== '/setup')
+  : PUBLIC_ROUTES;
+
 // Combined middleware to check authentication and setup
 router.use(async (req, res, next) => {
   // Public route check
-  if (PUBLIC_ROUTES.some(route => req.path.startsWith(route))) {
+  if (EFFECTIVE_PUBLIC_ROUTES.some(route => req.path.startsWith(route))) {
     return next();
   }
 
@@ -207,6 +214,20 @@ router.use(async (req, res, next) => {
   // may reach. Every page and API is checked here, in one table.
   authorizeRequest(req, res, next);
 });
+
+// Thumbnail cache. It used to live in public/images, which express.static
+// serves before any authentication, so a cached thumbnail could be fetched
+// without the access check. server.js refuses those URLs and clears the old
+// cache on startup.
+const THUMBNAIL_CACHE_DIR = path.join(process.cwd(), 'data', 'thumbnails');
+
+/**
+ * The owner of per-user state such as document chats: the CF Access user, or
+ * null for the single user of local mode.
+ */
+function chatOwner(req) {
+  return req.cfUser ? req.cfUser.id : null;
+}
 
 /**
  * Send the response for a document the caller may not see, or rethrow.
@@ -698,7 +719,12 @@ router.get('/playground', protectApiRoute, async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/thumb/:documentId', async (req, res) => {
-  const cachePath = path.join('./public/images', `${req.params.documentId}.png`);
+  const documentId = String(req.params.documentId);
+  if (!/^\d+$/.test(documentId)) {
+    return res.status(400).send('Invalid document ID');
+  }
+  // Outside public/: anything there is served without authentication.
+  const cachePath = path.join(THUMBNAIL_CACHE_DIR, `${documentId}.png`);
 
   try {
     try {
@@ -715,6 +741,7 @@ router.get('/thumb/:documentId', async (req, res) => {
       
       // Wenn ja, sende direkt das gecachte Bild
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.sendFile(path.resolve(cachePath));
       
     } catch (err) {
@@ -733,6 +760,7 @@ router.get('/thumb/:documentId', async (req, res) => {
 
       // Sende das Bild
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-store');
       res.send(thumbnailData);
     }
 
@@ -890,7 +918,7 @@ router.get('/chat/init', async (req, res) => {
   try {
     const documentId = req.query.documentId;
     await assertDocumentAccess(req, documentId);
-    const result = await ChatService.initializeChat(documentId);
+    const result = await ChatService.initializeChat(documentId, chatOwner(req));
     res.json(result);
   } catch (error) {
     if (handleDocumentAccessError(error, res)) return;
@@ -986,7 +1014,7 @@ router.post('/chat/message', async (req, res) => {
     await assertDocumentAccess(req, documentId);
     
     // Use the new streaming method
-    await ChatService.sendMessageStream(documentId, message, res);
+    await ChatService.sendMessageStream(documentId, message, res, chatOwner(req));
   } catch (error) {
     if (handleDocumentAccessError(error, res)) return;
     console.error('Chat message error:', error);
@@ -1086,7 +1114,7 @@ router.get('/chat/init/:documentId', async (req, res) => {
           return res.status(400).json({ error: 'Document ID is required' });
       }
       await assertDocumentAccess(req, documentId);
-      const result = await ChatService.initializeChat(documentId);
+      const result = await ChatService.initializeChat(documentId, chatOwner(req));
       res.json(result);
   } catch (error) {
       if (handleDocumentAccessError(error, res)) return;

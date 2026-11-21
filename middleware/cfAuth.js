@@ -279,6 +279,8 @@ const ROUTE_PERMISSIONS = [
 
   { prefix: '/admin', admin: true },
   { prefix: '/api/admin', admin: true },
+  // Writes the configuration and restarts the app: never public here.
+  { prefix: '/setup', admin: true },
 
   // RAG chat and its supporting endpoints
   { prefix: '/rag/settings', permissions: ['rag_settings'] },
@@ -298,8 +300,8 @@ const ROUTE_PERMISSIONS = [
 
   // Dashboard and processing overview
   { prefix: '/dashboard', permissions: ['dashboard'] },
-  { prefix: '/api/correspondentsCount', permissions: ['dashboard'] },
-  { prefix: '/api/tagsCount', permissions: ['dashboard'] },
+  { prefix: '/api/correspondentscount', permissions: ['dashboard'] },
+  { prefix: '/api/tagscount', permissions: ['dashboard'] },
   { prefix: '/api/processing-status', permissions: ['dashboard'] },
 
   // Manual processing and the playground
@@ -321,8 +323,11 @@ const ROUTE_PERMISSIONS = [
   { prefix: '/debug', permissions: ['settings'] },
 ];
 
+// Express matches routes case-insensitively, so this table must too: with a
+// case-sensitive match, /api/rag/INDEX reached the indexing route through the
+// broader /api/rag/ rule. Rules are lower-case; the path is lowered to match.
 function matchRoute(req) {
-  const p = req.path;
+  const p = String(req.path || '').toLowerCase();
   return ROUTE_PERMISSIONS.find(rule => {
     if (rule.exact !== undefined) return p === rule.exact || p === `${rule.exact}/`;
     return p.startsWith(rule.prefix);
@@ -357,6 +362,8 @@ function landingPath(user) {
   if (hasPermission(user, 'rag_chat')) return '/rag';
   if (hasPermission(user, 'document_chat')) return '/chat';
   if (hasPermission(user, 'manual')) return '/manual';
+  if (hasPermission(user, 'playground')) return '/playground';
+  if (hasPermission(user, 'rag_settings')) return '/rag/settings';
   if (hasPermission(user, 'settings')) return '/settings';
   return null;
 }
