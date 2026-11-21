@@ -514,9 +514,9 @@ class OllamaService {
      * @param {string} id - Document ID
      */
     async _handleThumbnailCaching(id) {
-        if (!id) return;
-
+        // Text-only analysis has no Paperless document, hence no thumbnail
         const cachePath = thumbnailPath(id);
+        if (!cachePath) return;
         try {
             await fs.access(cachePath);
             console.log('[DEBUG] Thumbnail already cached');

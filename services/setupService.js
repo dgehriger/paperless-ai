@@ -1,4 +1,20 @@
 const fs = require('fs').promises;
+
+/**
+ * A value as dotenv will read it back unchanged. Parsing the existing file
+ * strips its quotes, so writing values raw would turn JWT_SECRET="a#b" into
+ * JWT_SECRET=a#b, which dotenv reads as "a" plus a comment. Plain values stay
+ * unquoted; anything with whitespace, '#', quotes or a newline is quoted,
+ * preferring single quotes, which both dotenv and python-dotenv (main.py)
+ * read literally.
+ */
+function quoteEnvValue(value) {
+  const text = value === undefined || value === null ? '' : String(value);
+  if (/^[^\s#'"`\\]*$/.test(text)) return text;
+  if (!text.includes("'")) return `'${text}'`;
+  if (!text.includes('`')) return `\`${text}\``;
+  return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
 const path = require('path');
 const axios = require('axios');
 const { OpenAI } = require('openai');
@@ -244,10 +260,7 @@ class SetupService {
           if (key === "SYSTEM_PROMPT") {
             return `${key}=\`${value}\n\``;
           }
-          if (typeof value === 'string' && value.includes('\n')) {
-            return `${key}=\`${value}\``;
-          }
-          return `${key}=${value}`;
+          return `${key}=${quoteEnvValue(value)}`;
         })
         .join('\n');
 

@@ -720,6 +720,7 @@ router.get('/thumb/:documentId', async (req, res) => {
     return res.status(400).send('Invalid document ID');
   }
   // Outside public/: anything there is served without authentication.
+  // documentId is numeric (checked above), so this is never null.
   const cachePath = thumbnailPath(documentId);
 
   try {

@@ -39,8 +39,8 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized');
       }
 
-      // Handle thumbnail caching
-      try {
+      // Handle thumbnail caching (only when analysing a Paperless document)
+      if (cachePath) try {
         await fs.access(cachePath);
         console.log('[DEBUG] Thumbnail already cached');
       } catch (err) {
