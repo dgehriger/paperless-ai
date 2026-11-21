@@ -18,6 +18,10 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcryptjs');
 const cookieParser = require('cookie-parser');
 const { authenticateJWT, isAuthenticated } = require('./auth.js');
+const { AUTH_MODE, requireAdmin, authorizeRequest, landingPath, getCfUser } = require('../middleware/cfAuth.js');
+const { assertDocumentAccess, filterDocuments, AccessDeniedError } = require('../services/accessService.js');
+const { thumbnailPath } = require('../services/thumbnailCache.js');
+const userModel = require('../models/userModel.js');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const customService = require('../services/customService.js');
 const config = require('../config/config.js');
@@ -139,34 +143,57 @@ let PUBLIC_ROUTES = [
   '/health',
   '/login',
   '/logout',
-  '/setup'
+  '/setup',
+  '/pending-approval',
+  '/shared/',
 ];
+
+// In cf_access mode the setup wizard is not public: it writes the
+// configuration and restarts the app, so it needs a verified administrator
+// (see ROUTE_PERMISSIONS). Local mode keeps it public for the first-run bootstrap.
+const EFFECTIVE_PUBLIC_ROUTES = AUTH_MODE === 'cf_access'
+  ? PUBLIC_ROUTES.filter(route => route !== '/setup')
+  : PUBLIC_ROUTES;
 
 // Combined middleware to check authentication and setup
 router.use(async (req, res, next) => {
-  const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
-  const apiKey = req.headers['x-api-key'];
-
   // Public route check
-  if (PUBLIC_ROUTES.some(route => req.path.startsWith(route))) {
+  if (EFFECTIVE_PUBLIC_ROUTES.some(route => req.path.startsWith(route))) {
     return next();
   }
 
-  // API key authentication
-  if (apiKey && apiKey === process.env.API_KEY) {
-    req.user = { apiKey: true };
-  } else {
-    // Fallback to JWT authentication
-    if (!token) {
-      return res.redirect('/login');
+  // CF Access mode: identity from the verified Cloudflare Access token
+  if (AUTH_MODE === 'cf_access') {
+    const user = await getCfUser(req);
+    if (!user) {
+      return res.status(401).send('Cloudflare Access authentication required.');
     }
+    if (!user.is_approved && !user.is_admin) {
+      return res.redirect('/pending-approval');
+    }
+    req.cfUser = user;
+    req.user = { id: user.id, email: user.email, cfAccess: true };
+  } else {
+    // Legacy local auth mode
+    const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
+    const apiKey = req.headers['x-api-key'];
 
-    try {
-      const decoded = jwt.verify(token, JWT_SECRET);
-      req.user = decoded;
-    } catch (error) {
-      res.clearCookie('jwt');
-      return res.redirect('/login');
+    // API key authentication
+    if (apiKey && apiKey === process.env.API_KEY) {
+      req.user = { apiKey: true };
+    } else {
+      // Fallback to JWT authentication
+      if (!token) {
+        return res.redirect('/login');
+      }
+
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET);
+        req.user = decoded;
+      } catch (error) {
+        res.clearCookie('jwt');
+        return res.redirect('/login');
+      }
     }
   }
 
@@ -183,12 +210,41 @@ router.use(async (req, res, next) => {
     console.error('Error checking setup configuration:', error);
     return res.status(500).send('Internal Server Error');
   }
-  
-  next();
+
+  // CF Access mode: approval says who may sign in, permissions say what they
+  // may reach. Every page and API is checked here, in one table.
+  authorizeRequest(req, res, next);
 });
+
+
+/**
+ * The owner of per-user state such as document chats: the CF Access user, or
+ * null for the single user of local mode.
+ */
+function chatOwner(req) {
+  return req.cfUser ? req.cfUser.id : null;
+}
+
+/**
+ * Send the response for a document the caller may not see, or rethrow.
+ */
+function handleDocumentAccessError(error, res) {
+  if (error instanceof AccessDeniedError) {
+    res.status(403).json({ error: error.message });
+    return true;
+  }
+  return false;
+}
 
 // Protected route middleware for API endpoints
 const protectApiRoute = (req, res, next) => {
+  // CF Access mode: already authenticated by main middleware
+  if (AUTH_MODE === 'cf_access') {
+    if (req.cfUser) return next();
+    return res.status(401).json({ message: 'Authentication required' });
+  }
+
+  // Legacy local auth
   const token = req.cookies.jwt || req.headers.authorization?.split(' ')[1];
   
   if (!token) {
@@ -242,6 +298,10 @@ const protectApiRoute = (req, res, next) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/login', (req, res) => {
+  // CF Access mode: no login page needed
+  if (AUTH_MODE === 'cf_access') {
+    return res.redirect('/dashboard');
+  }
   //check if a user exists beforehand
   documentModel.getUsers().then((users) => {
     if(users.length === 0) {
@@ -412,6 +472,48 @@ router.post('/login', async (req, res) => {
 router.get('/logout', (req, res) => {
   res.clearCookie('jwt');
   res.redirect('/login');
+});
+
+// Pending approval page (CF Access mode)
+router.get('/pending-approval', async (req, res) => {
+  if (AUTH_MODE !== 'cf_access') return res.redirect('/login');
+  const user = await getCfUser(req);
+  const email = user ? user.email : 'unknown';
+  if (user && (user.is_approved || user.is_admin)) {
+    const target = landingPath(user);
+    if (target) return res.redirect(target);
+    return res.status(403).render('error', {
+      title: 'No features assigned',
+      message: 'Your account is approved but has no permissions yet. Ask an administrator to grant you access.',
+    });
+  }
+  res.render('pending-approval', { email });
+});
+
+// Admin panel (CF Access mode)
+router.get('/admin', requireAdmin, (req, res) => {
+  res.render('admin', { title: 'Admin Panel' });
+});
+
+// Current user info endpoint (for frontend)
+router.get('/api/me', (req, res) => {
+  if (AUTH_MODE === 'cf_access' && req.cfUser) {
+    const user = req.cfUser;
+    return res.json({
+      authMode: 'cf_access',
+      id: user.id,
+      email: user.email,
+      name: user.name,
+      isAdmin: !!user.is_admin,
+      permissions: user.permissions || [],
+    });
+  }
+  // Local mode: basic info
+  res.json({
+    authMode: 'local',
+    isAdmin: true,
+    permissions: userModel.ALL_PERMISSIONS,
+  });
 });
 
 /**
@@ -613,9 +715,22 @@ router.get('/playground', protectApiRoute, async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/thumb/:documentId', async (req, res) => {
-  const cachePath = path.join('./public/images', `${req.params.documentId}.png`);
+  const documentId = String(req.params.documentId);
+  if (!/^\d+$/.test(documentId)) {
+    return res.status(400).send('Invalid document ID');
+  }
+  // Outside public/: anything there is served without authentication.
+  // documentId is numeric (checked above), so this is never null.
+  const cachePath = thumbnailPath(documentId);
 
   try {
+    try {
+      await assertDocumentAccess(req, req.params.documentId);
+    } catch (error) {
+      if (handleDocumentAccessError(error, res)) return;
+      throw error;
+    }
+
     // Prüfe ob das Bild bereits im Cache existiert
     try {
       await fs.access(cachePath);
@@ -623,6 +738,7 @@ router.get('/thumb/:documentId', async (req, res) => {
       
       // Wenn ja, sende direkt das gecachte Bild
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-store');
       return res.sendFile(path.resolve(cachePath));
       
     } catch (err) {
@@ -641,6 +757,7 @@ router.get('/thumb/:documentId', async (req, res) => {
 
       // Sende das Bild
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'private, no-store');
       res.send(thumbnailData);
     }
 
@@ -700,7 +817,7 @@ router.get('/thumb/:documentId', async (req, res) => {
 router.get('/chat', async (req, res) => {
   try {
       const {open} = req.query;
-      const documents = await paperlessService.getDocuments();
+      const documents = await filterDocuments(req, await paperlessService.getDocuments());
       const version = configFile.PAPERLESS_AI_VERSION || ' ';
       res.render('chat', { documents, open, version });
   } catch (error) {
@@ -795,9 +912,16 @@ router.get('/chat', async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 router.get('/chat/init', async (req, res) => {
-  const documentId = req.query.documentId;
-  const result = await ChatService.initializeChat(documentId);
-  res.json(result);
+  try {
+    const documentId = req.query.documentId;
+    await assertDocumentAccess(req, documentId);
+    const result = await ChatService.initializeChat(documentId, chatOwner(req));
+    res.json(result);
+  } catch (error) {
+    if (handleDocumentAccessError(error, res)) return;
+    console.error('[ERRO] initializing chat:', error);
+    res.status(500).json({ error: 'Failed to initialize chat' });
+  }
 });
 
 // Nachricht senden
@@ -884,10 +1008,12 @@ router.post('/chat/message', async (req, res) => {
     if (!documentId || !message) {
       return res.status(400).json({ error: 'Document ID and message are required' });
     }
+    await assertDocumentAccess(req, documentId);
     
     // Use the new streaming method
-    await ChatService.sendMessageStream(documentId, message, res);
+    await ChatService.sendMessageStream(documentId, message, res, chatOwner(req));
   } catch (error) {
+    if (handleDocumentAccessError(error, res)) return;
     console.error('Chat message error:', error);
     res.status(500).json({ error: error.message });
   }
@@ -984,9 +1110,11 @@ router.get('/chat/init/:documentId', async (req, res) => {
       if (!documentId) {
           return res.status(400).json({ error: 'Document ID is required' });
       }
-      const result = await ChatService.initializeChat(documentId);
+      await assertDocumentAccess(req, documentId);
+      const result = await ChatService.initializeChat(documentId, chatOwner(req));
       res.json(result);
   } catch (error) {
+      if (handleDocumentAccessError(error, res)) return;
       console.error('[ERRO] initializing chat:', error);
       res.status(500).json({ error: 'Failed to initialize chat' });
   }

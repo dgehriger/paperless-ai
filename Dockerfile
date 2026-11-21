@@ -8,10 +8,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
-    python3-dev \
     python3-venv \
-    make \
-    g++ \
     curl \
     wget && \
     apt-get clean && \
@@ -21,6 +18,7 @@ RUN apt-get update && \
 RUN npm install pm2 -g
 
 # Install Python dependencies for RAG service in a virtual environment
+# (no torch/sentence-transformers — uses external embeddings API)
 COPY requirements.txt /app/
 RUN python3 -m venv /app/venv
 ENV PATH="/app/venv/bin:$PATH"

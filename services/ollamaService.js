@@ -4,6 +4,7 @@ const {
     truncateToTokenLimit,
     writePromptToFile
 } = require('./serviceUtils');
+const { thumbnailPath } = require('./thumbnailCache');
 const axios = require('axios');
 const config = require('../config/config');
 const fs = require('fs').promises;
@@ -513,9 +514,9 @@ class OllamaService {
      * @param {string} id - Document ID
      */
     async _handleThumbnailCaching(id) {
-        if (!id) return;
-
-        const cachePath = path.join('./public/images', `${id}.png`);
+        // Text-only analysis has no Paperless document, hence no thumbnail
+        const cachePath = thumbnailPath(id);
+        if (!cachePath) return;
         try {
             await fs.access(cachePath);
             console.log('[DEBUG] Thumbnail already cached');
@@ -681,7 +682,7 @@ class OllamaService {
      * @param {string} prompt - The prompt to generate text from
      * @returns {Promise<string>} - The generated text
      */
-    async generateText(prompt) {
+    async generateText(prompt, options = {}) {
         try {
             // Calculate context window size based on prompt length
             const promptTokenCount = this._calculatePromptTokenCount(prompt);
@@ -692,7 +693,7 @@ class OllamaService {
 
             // Call Ollama API without enforcing a specific response format
             const response = await this.client.post(`${this.apiUrl}/api/generate`, {
-                model: this.model,
+                model: options.model || this.model,
                 prompt: prompt,
                 system: systemPrompt,
                 stream: false,

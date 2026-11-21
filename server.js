@@ -64,6 +64,30 @@ app.use((req, res, next) => {
 
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// Document thumbnails were once cached as public/images/<id>.png, where this
+// static handler served them to anyone. They are cached under data/ now;
+// refuse the old URLs and remove what is left of the old cache. The static
+// handler decodes and normalizes the path, so the guard must judge the same
+// path it would serve: "/images/%31.png" and "/x/../images/1.png" are 1.png.
+const LEGACY_THUMBNAIL = /^\/images\/\d+\.png$/i;
+app.use((req, res, next) => {
+  let servedPath;
+  try {
+    servedPath = path.posix.normalize(decodeURIComponent(req.path).replace(/\\/g, '/'));
+  } catch {
+    return res.status(400).end();
+  }
+  return LEGACY_THUMBNAIL.test(servedPath) ? res.status(404).end() : next();
+});
+try {
+  const fsSync = require('fs');
+  const legacyDir = path.join(__dirname, 'public', 'images');
+  for (const name of fsSync.existsSync(legacyDir) ? fsSync.readdirSync(legacyDir) : []) {
+    if (/^\d+\.png$/i.test(name)) fsSync.unlinkSync(path.join(legacyDir, name));
+  }
+} catch (error) {
+  console.warn('[WARN] Could not clear the legacy thumbnail cache:', error.message);
+}
 app.use(express.static(path.join(__dirname, 'public')));
 app.use(cookieParser());
 
@@ -434,21 +458,72 @@ async function scanDocuments() {
 app.use('/', setupRoutes);
 const authRoutes = require('./routes/auth');
 const ragRoutes = require('./routes/rag');
+const adminRoutes = require('./routes/admin');
+const proxyRoutes = require('./routes/proxy');
+const { AUTH_MODE, landingPath } = require('./middleware/cfAuth');
+
+// Mount admin routes (CF Access mode)
+app.use('/api/admin', adminRoutes);
+
+// Mount document proxy routes (for thumbnails, previews, downloads)
+app.use('/api/documents', proxyRoutes);
 
 // Mount RAG routes if enabled
 if (process.env.RAG_SERVICE_ENABLED === 'true') {
   app.use('/api/rag', ragRoutes);
   
+  const userModel = require('./models/userModel');
+  const chatHistoryService = require('./services/chatHistoryService');
+
+  // Shared conversation view (public, token-based access)
+  app.get('/shared/:token', async (req, res) => {
+    try {
+      const tokenData = userModel.getShareToken(req.params.token);
+      if (!tokenData) {
+        return res.status(404).send('Share link expired or not found.');
+      }
+      const session = await chatHistoryService.getSession(tokenData.session_id);
+      if (!session) {
+        return res.status(404).send('Conversation not found.');
+      }
+      const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace(/\/api\/?$/, '');
+      const paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || paperlessUrl;
+      res.render('rag', {
+        title: session.title || 'Shared Conversation',
+        paperlessUrl: paperlessPublicUrl,
+        // The template serializes it (escaped for a <script> context);
+        // serializing here as well would hand the page a string.
+        sharedSession: session,
+        readOnly: true,
+        authMode: AUTH_MODE,
+      });
+    } catch (error) {
+      console.error('Error loading shared conversation:', error);
+      res.status(500).send('Error loading shared conversation');
+    }
+  });
+
   // RAG UI route
   app.get('/rag', async (req, res) => {
     try {
+      const paperlessUrl = (process.env.PAPERLESS_API_URL || '').replace(/\/api\/?$/, '');
+      const paperlessPublicUrl = process.env.PAPERLESS_PUBLIC_URL || paperlessUrl;
       res.render('rag', { 
-        title: 'Dokumenten-Fragen'
+        title: 'Dokumenten-Fragen',
+        paperlessUrl: paperlessPublicUrl,
+        sharedSession: null,
+        readOnly: false,
+        authMode: AUTH_MODE,
       });
     } catch (error) {
       console.error('Error rendering RAG UI:', error);
       res.status(500).send('Error loading RAG interface');
     }
+  });
+
+  // RAG Settings page
+  app.get('/rag/settings', (req, res) => {
+    res.render('rag-settings', { title: 'RAG Settings' });
   });
 }
 
@@ -479,6 +554,16 @@ if (process.env.RAG_SERVICE_ENABLED === 'true') {
  */
 app.get('/', async (req, res) => {
   try {
+    if (AUTH_MODE === 'cf_access' && req.cfUser) {
+      const target = landingPath(req.cfUser);
+      if (!target) {
+        return res.status(403).render('error', {
+          title: 'No features assigned',
+          message: 'Your account is approved but has no permissions yet. Ask an administrator to grant you access.',
+        });
+      }
+      return res.redirect(target);
+    }
     res.redirect('/dashboard');
   } catch (error) {
     console.error('[ERROR] in root route:', error);

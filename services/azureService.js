@@ -4,6 +4,7 @@ const {
   truncateToTokenLimit,
   writePromptToFile
 } = require('./serviceUtils');
+const { thumbnailPath } = require('./thumbnailCache');
 const OpenAI = require('openai');
 const AzureOpenAI = require('openai').AzureOpenAI;
 const config = require('../config/config');
@@ -29,7 +30,7 @@ class AzureOpenAIService {
   }
 
   async analyzeDocument(content, existingTags = [], existingCorrespondentList = [], existingDocumentTypesList = [], id, customPrompt = null, options = {}) {
-    const cachePath = path.join('./public/images', `${id}.png`);
+    const cachePath = thumbnailPath(id);
     try {
       this.initialize();
       const now = new Date();
@@ -39,8 +40,8 @@ class AzureOpenAIService {
         throw new Error('AzureOpenAI client not initialized');
       }
 
-      // Handle thumbnail caching
-      try {
+      // Handle thumbnail caching (only when analysing a Paperless document)
+      if (cachePath) try {
         await fs.access(cachePath);
         console.log('[DEBUG] Thumbnail already cached');
       } catch (err) {
@@ -357,7 +358,7 @@ class AzureOpenAIService {
    * @param {string} prompt - The prompt to generate text from
    * @returns {Promise<string>} - The generated text
    */
-  async generateText(prompt) {
+  async generateText(prompt, options = {}) {
     try {
       this.initialize();
 
@@ -365,7 +366,7 @@ class AzureOpenAIService {
         throw new Error('AzureOpenAI client not initialized - missing API key');
       }
 
-      const model = process.env.AZURE_DEPLOYMENT_NAME;
+      const model = options.model || process.env.AZURE_DEPLOYMENT_NAME;
 
       const response = await this.client.chat.completions.create({
         model: model,

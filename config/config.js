@@ -52,8 +52,12 @@ console.log('Loaded environment variables:', {
 });
 
 module.exports = {
-  PAPERLESS_AI_VERSION: '3.0.9',
+  PAPERLESS_AI_VERSION: '3.1.0',
   CONFIGURED: false,
+  // Authentication mode: 'local' (legacy JWT) or 'cf_access' (Cloudflare tunnel)
+  authMode: (process.env.AUTH_MODE || 'local').toLowerCase(),
+  // Comma-separated emails auto-promoted to admin (cf_access mode)
+  adminEmails: (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(e => e.length > 0),
   disableAutomaticProcessing: process.env.DISABLE_AUTOMATIC_PROCESSING || 'no',
   predefinedMode: process.env.PROCESS_PREDEFINED_DOCUMENTS,
   tokenLimit: process.env.TOKEN_LIMIT || 128000,

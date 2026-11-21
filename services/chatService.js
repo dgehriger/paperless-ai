@@ -12,7 +12,9 @@ const { OpenAI } = require('openai');
 
 class ChatService {
   constructor() {
-    this.chats = new Map(); // Stores chat histories: documentId -> messages[]
+    // Chat histories keyed by owner and document (see chatKey): two users who
+    // may read the same document must not share, or reset, one conversation.
+    this.chats = new Map();
     this.tempDir = path.join(os.tmpdir(), 'paperless-chat');
     
     // Create temporary directory if it doesn't exist
@@ -54,10 +56,20 @@ class ChatService {
   }
 
   /**
+   * The history key for one user's chat about one document.
+   * @param {string} documentId - The ID of the document
+   * @param {string|null} ownerId - The CF Access user ID, or null in local mode
+   */
+  chatKey(documentId, ownerId = null) {
+    return `${ownerId || 'local'}:${documentId}`;
+  }
+
+  /**
    * Initializes a new chat for a document
    * @param {string} documentId - The ID of the document
+   * @param {string|null} ownerId - The user the chat belongs to
    */
-  async initializeChat(documentId) {
+  async initializeChat(documentId, ownerId = null) {
     try {
       // Get document information
       const document = await PaperlessService.getDocument(documentId);
@@ -84,7 +96,7 @@ class ChatService {
         }
       ];
       
-      this.chats.set(documentId, {
+      this.chats.set(this.chatKey(documentId, ownerId), {
         messages,
         documentTitle: document.title
       });
@@ -99,13 +111,14 @@ class ChatService {
     }
   }
 
-  async sendMessageStream(documentId, userMessage, res) {
+  async sendMessageStream(documentId, userMessage, res, ownerId = null) {
     try {
-      if (!this.chats.has(documentId)) {
-        await this.initializeChat(documentId);
+      const key = this.chatKey(documentId, ownerId);
+      if (!this.chats.has(key)) {
+        await this.initializeChat(documentId, ownerId);
       }
 
-      const chatData = this.chats.get(documentId);
+      const chatData = this.chats.get(key);
       chatData.messages.push({
         role: "user",
         content: userMessage
@@ -211,7 +224,7 @@ class ChatService {
         role: "assistant",
         content: fullResponse
       });
-      this.chats.set(documentId, chatData);
+      this.chats.set(key, chatData);
 
       // End the stream
       res.write('data: [DONE]\n\n');
@@ -224,20 +237,18 @@ class ChatService {
     }
   }
 
-  getChatHistory(documentId) {
-    const chatData = this.chats.get(documentId);
+  getChatHistory(documentId, ownerId = null) {
+    const chatData = this.chats.get(this.chatKey(documentId, ownerId));
     return chatData ? chatData.messages : [];
   }
 
-  chatExists(documentId) {
-    return this.chats.has(documentId);
+  chatExists(documentId, ownerId = null) {
+    return this.chats.has(this.chatKey(documentId, ownerId));
   }
 
   async cleanup() {
     try {
-      for (const documentId of this.chats.keys()) {
-        await this.deleteChat(documentId);
-      }
+      this.chats.clear();
       if (fs.existsSync(this.tempDir)) {
         await fs.promises.rmdir(this.tempDir, { recursive: true });
       }

@@ -4,6 +4,7 @@ const {
   truncateToTokenLimit,
   writePromptToFile
 } = require('./serviceUtils');
+const { thumbnailPath } = require('./thumbnailCache');
 const OpenAI = require('openai');
 const config = require('../config/config');
 const tiktoken = require('tiktoken');
@@ -28,7 +29,7 @@ class CustomOpenAIService {
   }
 
   async analyzeDocument(content, existingTags = [], existingCorrespondentList = [], existingDocumentTypesList = [], id, customPrompt = null, options = {}) {
-    const cachePath = path.join('./public/images', `${id}.png`);
+    const cachePath = thumbnailPath(id);
     try {
       this.initialize();
       const now = new Date();
@@ -38,8 +39,8 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized');
       }
 
-      // Handle thumbnail caching
-      try {
+      // Handle thumbnail caching (only when analysing a Paperless document)
+      if (cachePath) try {
         await fs.access(cachePath);
         console.log('[DEBUG] Thumbnail already cached');
       } catch (err) {
@@ -374,7 +375,7 @@ class CustomOpenAIService {
    * @param {string} prompt - The prompt to generate text from
    * @returns {Promise<string>} - The generated text
    */
-  async generateText(prompt) {
+  async generateText(prompt, options = {}) {
     try {
       this.initialize();
 
@@ -382,7 +383,7 @@ class CustomOpenAIService {
         throw new Error('Custom OpenAI client not initialized - missing API key');
       }
 
-      const model = config.custom.model;
+      const model = options.model || config.custom.model;
 
       const response = await this.client.chat.completions.create({
         model: model,

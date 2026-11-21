@@ -14,7 +14,7 @@ It enables **fully automated document workflows**, **contextual chat**, and **po
 > 💡 Just ask:  
 > “When did I sign my rental agreement?”  
 > “What was the amount of the last electricity bill?”  
-> “Which documents mention my health insurance?”  
+> “Which documents mention my health insurance?”
 
 Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantically across your full archive and get precise, natural language answers.
 
@@ -23,6 +23,7 @@ Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantic
 ## ✨ Features
 
 ### 🔄 Automated Document Processing
+
 - Detects new documents in Paperless-ngx automatically
 - Analyzes content using OpenAI API, Ollama, and other compatible backends
 - Assigns title, tags, document type, and correspondent
@@ -40,22 +41,25 @@ Powered by **Retrieval-Augmented Generation (RAG)**, you can now search semantic
   - ...and more!
 
 ### 🧠 RAG-Based AI Chat
+
 - Natural language document search and Q&A
 - Understands full document context (not just keywords)
 - Semantic memory powered by your own data
 - Fast, intelligent, privacy-friendly document queries  
-![RAG_CHAT_DEMO](https://raw.githubusercontent.com/clusterzx/paperless-ai/refs/heads/main/ppairag.png)
+  ![RAG_CHAT_DEMO](https://raw.githubusercontent.com/clusterzx/paperless-ai/refs/heads/main/ppairag.png)
 
 ### ⚙️ Manual Processing
+
 - Web interface for manual AI tagging
 - Useful when reviewing sensitive documents
 - Accessible via `/manual`
 
 ### 🧩 Smart Tagging & Rules
+
 - Define rules to limit which documents are processed
 - Disable prompts and apply tags automatically
 - Set custom output tags for tracked classification  
-![PPAI_SHOWCASE3](https://github.com/user-attachments/assets/1fc9f470-6e45-43e0-a212-b8fa6225e8dd)
+  ![PPAI_SHOWCASE3](https://github.com/user-attachments/assets/1fc9f470-6e45-43e0-a212-b8fa6225e8dd)
 
 ---
 
@@ -95,6 +99,124 @@ npm run test
 - ✅ Tag rules and filters
 - ✅ Integrated document chat with RAG
 - ✅ Responsive web interface
+
+---
+
+## 🧭 RAG Embeddings
+
+RAG chat embeds documents through an OpenAI-compatible `/embeddings` endpoint; no model runs locally. Explicit settings take precedence:
+
+| Variable                 | Meaning                                         |
+| ------------------------ | ----------------------------------------------- |
+| `RAG_EMBEDDINGS_API_URL` | Base URL of the endpoint, e.g. `https://api.openai.com/v1` |
+| `RAG_EMBEDDINGS_API_KEY` | API key for that endpoint                       |
+| `RAG_EMBEDDINGS_MODEL`   | Embedding model (default `text-embedding-3-small`) |
+
+Without them, the endpoint follows `AI_PROVIDER`: `openai` uses `OPENAI_API_KEY`, `ollama` uses `OLLAMA_API_URL` with the model `nomic-embed-text`, and `custom` uses `CUSTOM_BASE_URL` and `CUSTOM_API_KEY`. Azure and any other provider need the `RAG_EMBEDDINGS_*` variables; until they are set, indexing stops and the RAG status reports what is missing.
+
+The index records which endpoint and model built it. When either changes, including on the first start after an upgrade from a local model, the index is rebuilt automatically. A document whose embedding fails stays searchable by keyword and is embedded again on the next indexing run.
+
+---
+
+## 👥 Multi-User Access (Cloudflare Access)
+
+With `AUTH_MODE=cf_access`, Paperless-AI sits behind a Cloudflare Access application and every visitor gets their own account:
+
+| Variable                | Meaning                                                           |
+| ----------------------- | ----------------------------------------------------------------- |
+| `CF_ACCESS_TEAM_DOMAIN` | Your team domain, e.g. `yourteam.cloudflareaccess.com`            |
+| `CF_ACCESS_AUD`         | The Access application's audience (AUD) tag                       |
+| `ADMIN_EMAILS`          | Comma-separated addresses that become administrators on first login |
+
+Identity comes only from the `Cf-Access-Jwt-Assertion` token, verified against your team's signing keys, audience and issuer; requests without a valid token are refused. Both variables are required in this mode. Do not publish the container port beyond the tunnel.
+
+New users wait for approval in the admin panel (`/admin`), where an administrator grants permissions per feature and assigns libraries. A library restricts a user to documents matching all of its filters (storage paths, tags, correspondents, document types); a user with several libraries sees documents matching any of them, and a user with none sees every document. The `dashboard`, `manual`, `playground` and `settings` permissions cover the whole archive and its configuration, so grant them only to trusted users.
+
+---
+
+## 🔌 MCP Server (Model Context Protocol)
+
+Paperless-AI includes an MCP server (`mcp-server.js`) that exposes your document archive as tools for AI assistants like Claude Desktop, VS Code Copilot, and other MCP-compatible clients.
+
+### Available Tools
+
+| Tool               | Description                                                              |
+| ------------------ | ------------------------------------------------------------------------ |
+| `search_documents` | Hybrid BM25 + semantic search with optional date/correspondent filters   |
+| `ask_question`     | RAG-powered Q&A — retrieves context and generates an answer with sources |
+| `get_document`     | Retrieve a specific document by its Paperless-ngx ID                     |
+| `index_documents`  | Trigger reindexing of the RAG search engine                              |
+| `get_status`       | Check index health, document count, and AI model info                    |
+
+### Prerequisites
+
+The MCP server connects to a running paperless-ai instance over HTTP and authenticates on every request:
+
+| Variable                                     | Meaning                                                                 |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| `PAPERLESS_AI_URL`                           | Your instance (default `http://localhost:3000`)                         |
+| `PAPERLESS_AI_API_KEY`                       | The instance's API key from Settings (`AUTH_MODE=local`)                |
+| `CF_ACCESS_CLIENT_ID`, `CF_ACCESS_CLIENT_SECRET` | A Cloudflare Access service token (`AUTH_MODE=cf_access`)           |
+
+A service token signs in as `<client id>@service-token.cloudflareaccess`. Approve it in the admin panel and grant `rag_chat`, plus `rag_settings` for `index_documents`. Add the variables to the `env` block of the client configurations below.
+
+### Claude Desktop
+
+Add to `~/.claude/claude_desktop_config.json` (macOS/Linux) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "paperless-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000",
+        "PAPERLESS_AI_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+### VS Code (GitHub Copilot)
+
+Add to `.vscode/mcp.json` in your workspace (or user-level `settings.json` under `"mcp"`):
+
+```json
+{
+  "servers": {
+    "paperless-ai": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000",
+        "PAPERLESS_AI_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
+
+### Cursor
+
+Add to `~/.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "paperless-ai": {
+      "command": "node",
+      "args": ["/absolute/path/to/paperless-ai/mcp-server.js"],
+      "env": {
+        "PAPERLESS_AI_URL": "https://your-paperless-ai-instance:3000",
+        "PAPERLESS_AI_API_KEY": "your-api-key"
+      }
+    }
+  }
+}
+```
 
 ---
 
