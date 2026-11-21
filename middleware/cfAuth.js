@@ -296,16 +296,19 @@ const ROUTE_PERMISSIONS = [
 
   // Per-document chat
   { prefix: '/chat', permissions: ['document_chat'] },
-  { prefix: '/thumb/', permissions: ['document_chat', 'dashboard', 'manual'] },
+  { prefix: '/thumb/', permissions: ['document_chat', 'dashboard', 'manual', 'playground'] },
 
   // Dashboard and processing overview
   { prefix: '/dashboard', permissions: ['dashboard'] },
-  { prefix: '/api/correspondentscount', permissions: ['dashboard'] },
-  { prefix: '/api/tagscount', permissions: ['dashboard'] },
+  { prefix: '/api/correspondentscount', permissions: ['dashboard', 'manual'] },
+  { prefix: '/api/tagscount', permissions: ['dashboard', 'manual'] },
+  { prefix: '/api/correspondents', permissions: ['dashboard', 'manual'] },
+  { prefix: '/api/tags', permissions: ['dashboard', 'manual'] },
   { prefix: '/api/processing-status', permissions: ['dashboard'] },
 
   // Manual processing and the playground
   { prefix: '/manual/playground', permissions: ['playground'] },
+  { prefix: '/manual/preview', permissions: ['manual', 'playground'] },
   { prefix: '/playground', permissions: ['playground'] },
   { prefix: '/manual', permissions: ['manual'] },
 

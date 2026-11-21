@@ -1,6 +1,12 @@
 // services/paperlessService.js
 const axios = require('axios');
 const config = require('../config/config');
+
+// The same boolean forms config.js accepts (yes, true, 1), read at call time
+// so a settings change applies without depending on when config was loaded.
+function envFlag(name) {
+  return ['yes', 'true', '1'].includes(String(process.env[name] || '').trim().toLowerCase());
+}
 const fs = require('fs');
 const path = require('path');
 const { parse, isValid, parseISO, format } = require('date-fns');
@@ -318,7 +324,7 @@ class PaperlessService {
       // Explicitly check options first, then env var
       const restrictToExistingTags = options.restrictToExistingTags === true || 
                                    (options.restrictToExistingTags === undefined && 
-                                    process.env.RESTRICT_TO_EXISTING_TAGS === 'yes');
+                                    envFlag('RESTRICT_TO_EXISTING_TAGS'));
       
       // Input validation
       if (!tagNames) {
@@ -1029,7 +1035,7 @@ async searchForExistingCorrespondent(correspondent) {
     // Explicitly check options first, then env var
     const restrictToExistingCorrespondents = options.restrictToExistingCorrespondents === true || 
                                            (options.restrictToExistingCorrespondents === undefined && 
-                                            process.env.RESTRICT_TO_EXISTING_CORRESPONDENTS === 'yes');
+                                            envFlag('RESTRICT_TO_EXISTING_CORRESPONDENTS'));
     
     console.log(`[DEBUG] Processing correspondent with restrictToExistingCorrespondents=${restrictToExistingCorrespondents}`);
   
@@ -1121,7 +1127,7 @@ async getOrCreateDocumentType(name) {
   this.initialize();
   
   // Check if we should restrict to existing document types
-  const restrictToExisting = process.env.RESTRICT_TO_EXISTING_DOCUMENT_TYPES === 'yes';
+  const restrictToExisting = envFlag('RESTRICT_TO_EXISTING_DOCUMENT_TYPES');
   console.log(`[DEBUG] Processing document type with restrictToExistingDocumentTypes=${restrictToExisting}`);
 
   try {

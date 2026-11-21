@@ -1227,14 +1227,32 @@ class SearchEngine:
             
         try:
             if accept is None:
-                n_results = min(top_k, 100)  # Limit to avoid overloading
+                results = self.collection.query(
+                    query_texts=[query],
+                    n_results=min(top_k, 100),  # Limit to avoid overloading
+                    include=["distances"]
+                )
             else:
-                n_results = max(1, self.collection.count())
-            results = self.collection.query(
-                query_texts=[query],
-                n_results=n_results,
-                include=["distances"]
-            )
+                allowed = [str(d["id"]) for d in self.documents if accept(d)]
+                if not allowed:
+                    return []
+                try:
+                    # Rank only the documents the filter admits, and only as
+                    # many as are needed
+                    results = self.collection.query(
+                        query_texts=[query],
+                        n_results=min(top_k, len(allowed)),
+                        ids=allowed,
+                        include=["distances"]
+                    )
+                except TypeError:
+                    # Chroma before 1.0 cannot restrict a query to IDs: rank
+                    # the whole collection and filter below instead
+                    results = self.collection.query(
+                        query_texts=[query],
+                        n_results=max(1, self.collection.count()),
+                        include=["distances"]
+                    )
             
             if not results or "ids" not in results or not results["ids"] or len(results["ids"]) == 0:
                 logger.warning("ChromaDB search returned no results")
@@ -1556,8 +1574,11 @@ def run_indexing(force_update=False, check_new=False):
         retry_count = len(global_state.data_manager.embedding_failed_ids)
 
         # Update the status message based on whether new documents were found
-        # (or documents whose embedding failed last time are due a retry)
-        if new_docs_count > 0 or retry_count > 0:
+        # (or documents whose embedding failed last time are due a retry, or the
+        # vector collection is not open -- e.g. startup rejected one built with
+        # another embedding model, while BM25 alone kept search available)
+        vectors_missing = not global_state.data_manager.chroma_initialized
+        if new_docs_count > 0 or retry_count > 0 or vectors_missing:
             global_state.indexing_status.message = f"Indexiere {new_docs_count} neue Dokumente"
             global_state.save_state()
             

@@ -133,6 +133,12 @@ const deleteExpiredTokens = db.prepare(`
   DELETE FROM share_tokens WHERE expires_at IS NOT NULL AND julianday(expires_at) <= julianday('now')
 `);
 const listUserLibraryIds = db.prepare('SELECT user_id, library_id FROM user_libraries');
+const listLibraryUsers = db.prepare(`
+  SELECT u.id, u.email FROM cf_users u
+  JOIN user_libraries ul ON ul.user_id = u.id
+  WHERE ul.library_id = ?
+  ORDER BY u.email
+`);
 
 // ============================================================================
 // Default permissions list
@@ -275,6 +281,14 @@ module.exports = {
 
   deleteLibrary(id) {
     deleteLibraryStmt.run(id);
+  },
+
+  /**
+   * Users assigned to a library. A user's last library cannot simply vanish:
+   * no library means unrestricted, so deleting it would widen their access.
+   */
+  getLibraryUsers(id) {
+    return listLibraryUsers.all(id);
   },
 
   // User-Library mapping

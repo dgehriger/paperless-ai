@@ -4,6 +4,7 @@ const {
   truncateToTokenLimit,
   writePromptToFile
 } = require('./serviceUtils');
+const { thumbnailPath } = require('./thumbnailCache');
 const OpenAI = require('openai');
 const config = require('../config/config');
 const paperlessService = require('./paperlessService');
@@ -38,7 +39,7 @@ class OpenAIService {
   }
 
   async analyzeDocument(content, existingTags = [], existingCorrespondentList = [], existingDocumentTypesList = [], id, customPrompt = null, options = {}) {
-    const cachePath = path.join('./public/images', `${id}.png`);
+    const cachePath = thumbnailPath(id);
     try {
       this.initialize();
       const now = new Date();

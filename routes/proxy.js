@@ -22,6 +22,29 @@ function parseDocId(req, res) {
   return docId;
 }
 
+/**
+ * The download's filename: Paperless's own (from its Content-Disposition, which
+ * carries the real extension), else the document's original file name, else a
+ * neutral name. The bytes are not necessarily a PDF.
+ */
+function downloadFilename(disposition, doc, docId) {
+  if (disposition) {
+    const star = /filename\*\s*=\s*(?:UTF-8|utf-8)''([^;]+)/.exec(disposition);
+    if (star) {
+      try { return decodeURIComponent(star[1].trim()); } catch { /* fall through */ }
+    }
+    const plain = /filename\s*=\s*"?([^";]+)"?/.exec(disposition);
+    if (plain) return plain[1].trim();
+  }
+  if (doc && doc.original_file_name) return doc.original_file_name;
+  return `document-${docId}`;
+}
+
+function contentDisposition(filename) {
+  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename)}`;
+}
+
 function sendError(res, error, fallback) {
   if (error instanceof AccessDeniedError) {
     return res.status(403).json({ error: error.message });
@@ -94,10 +117,9 @@ router.get('/:id/download', async (req, res) => {
 
     paperlessService.initialize();
 
-    // Get document metadata for filename (and for the access check)
+    // Get document metadata for the access check
     const doc = await paperlessService.getDocument(docId);
     await assertDocumentAccess(req, doc);
-    const filename = doc?.title ? `${doc.title}.pdf` : `document-${docId}.pdf`;
 
     const response = await paperlessService.client.get(`/documents/${docId}/download/`, {
       responseType: 'arraybuffer',
@@ -107,10 +129,11 @@ router.get('/:id/download', async (req, res) => {
       return res.status(404).json({ error: 'Document not available for download' });
     }
 
-    const contentType = response.headers['content-type'] || 'application/pdf';
+    const contentType = response.headers['content-type'] || 'application/octet-stream';
+    const filename = downloadFilename(response.headers['content-disposition'], doc, docId);
     res.set('Content-Type', contentType);
     res.set('Cache-Control', PRIVATE_CACHE);
-    res.set('Content-Disposition', `attachment; filename="${encodeURIComponent(filename)}"`);
+    res.set('Content-Disposition', contentDisposition(filename));
     res.send(Buffer.from(response.data));
   } catch (error) {
     console.error(`Error proxying download for ${req.params.id}:`, error.message);

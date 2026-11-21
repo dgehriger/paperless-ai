@@ -66,9 +66,19 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 // Document thumbnails were once cached as public/images/<id>.png, where this
 // static handler served them to anyone. They are cached under data/ now;
-// refuse the old URLs and remove what is left of the old cache.
+// refuse the old URLs and remove what is left of the old cache. The static
+// handler decodes and normalizes the path, so the guard must judge the same
+// path it would serve: "/images/%31.png" and "/x/../images/1.png" are 1.png.
 const LEGACY_THUMBNAIL = /^\/images\/\d+\.png$/i;
-app.use((req, res, next) => (LEGACY_THUMBNAIL.test(req.path) ? res.status(404).end() : next()));
+app.use((req, res, next) => {
+  let servedPath;
+  try {
+    servedPath = path.posix.normalize(decodeURIComponent(req.path).replace(/\\/g, '/'));
+  } catch {
+    return res.status(400).end();
+  }
+  return LEGACY_THUMBNAIL.test(servedPath) ? res.status(404).end() : next();
+});
 try {
   const fsSync = require('fs');
   const legacyDir = path.join(__dirname, 'public', 'images');

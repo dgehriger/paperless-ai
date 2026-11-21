@@ -235,6 +235,7 @@
             <div class="form-group">
                 <label><input type="checkbox" id="is-admin-cb" ${user.is_admin ? 'checked' : ''}> Admin</label>
             </div>
+            <div id="edit-user-error" class="text-red-600 text-sm mb-2" style="display:none"></div>
             <div class="flex gap-2 justify-end mt-4">
                 <button class="action-btn" onclick="closeModal()">Cancel</button>
                 <button class="action-btn primary" onclick="saveUser('${id}')">Save</button>
@@ -247,25 +248,32 @@
         const libs = Array.from(document.querySelectorAll('#lib-chips .perm-chip.selected')).map(el => el.dataset.lib);
         const isAdmin = document.getElementById('is-admin-cb').checked;
 
-        await Promise.all([
-            fetch(`/api/admin/users/${id}/permissions`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ permissions: perms })
-            }),
-            fetch(`/api/admin/users/${id}/libraries`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ libraryIds: libs })
-            }),
-            fetch(`/api/admin/users/${id}/admin`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ isAdmin })
-            }),
-        ]);
-        closeModal();
+        // Each update is checked: fetch() resolves on HTTP errors, and a
+        // dialog that closes regardless hides a partial save.
+        const updates = [
+            ['permissions', `/api/admin/users/${id}/permissions`, { permissions: perms }],
+            ['libraries', `/api/admin/users/${id}/libraries`, { libraryIds: libs }],
+            ['admin role', `/api/admin/users/${id}/admin`, { isAdmin }],
+        ];
+        const failed = [];
+        for (const [label, url, body] of updates) {
+            try {
+                const res = await fetch(url, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!res.ok) failed.push(`${label}: ${await errorText(res)}`);
+            } catch (err) {
+                failed.push(`${label}: ${err.message}`);
+            }
+        }
         await loadData();
+        if (failed.length) {
+            showModalError('edit-user-error', `Not saved -- ${failed.join('; ')}. The table shows what is stored now.`);
+            return;
+        }
+        closeModal();
     }
 
     // Library CRUD
@@ -371,6 +379,7 @@
                 <label>Document Types (comma-separated)</label>
                 <input id="lib-types" value="${escHtml((f.document_types || []).join(', '))}">
             </div>
+            <div id="lib-error" class="text-red-600 text-sm mb-2" style="display:none"></div>
             <div class="flex gap-2 justify-end mt-4">
                 <button class="action-btn" onclick="closeModal()">Cancel</button>
                 <button class="action-btn primary" onclick="saveLibrary(${id ? `'${id}'` : 'null'})">Save</button>
@@ -392,19 +401,45 @@
         };
         const url = id ? `/api/admin/libraries/${id}` : '/api/admin/libraries';
         const method = id ? 'PUT' : 'POST';
-        await fetch(url, {
-            method,
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
-        });
+        try {
+            const res = await fetch(url, {
+                method,
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body)
+            });
+            if (!res.ok) {
+                showModalError('lib-error', await errorText(res));
+                return;
+            }
+        } catch (err) {
+            showModalError('lib-error', err.message);
+            return;
+        }
         closeModal();
         await loadData();
     }
 
     async function deleteLibrary(id) {
         if (!confirm('Delete this library?')) return;
-        await fetch(`/api/admin/libraries/${id}`, { method: 'DELETE' });
+        const res = await fetch(`/api/admin/libraries/${id}`, { method: 'DELETE' });
+        if (!res.ok) alert(await errorText(res));
         await loadData();
+    }
+
+    async function errorText(res) {
+        try {
+            const data = await res.json();
+            return data.error || data.message || `HTTP ${res.status}`;
+        } catch {
+            return `HTTP ${res.status}`;
+        }
+    }
+
+    function showModalError(elementId, message) {
+        const el = document.getElementById(elementId);
+        if (!el) return alert(message);
+        el.textContent = message;
+        el.style.display = 'block';
     }
 
     // Modal helpers

@@ -20,6 +20,7 @@ const cookieParser = require('cookie-parser');
 const { authenticateJWT, isAuthenticated } = require('./auth.js');
 const { AUTH_MODE, requireAdmin, authorizeRequest, landingPath, getCfUser } = require('../middleware/cfAuth.js');
 const { assertDocumentAccess, filterDocuments, AccessDeniedError } = require('../services/accessService.js');
+const { thumbnailPath } = require('../services/thumbnailCache.js');
 const userModel = require('../models/userModel.js');
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
 const customService = require('../services/customService.js');
@@ -215,11 +216,6 @@ router.use(async (req, res, next) => {
   authorizeRequest(req, res, next);
 });
 
-// Thumbnail cache. It used to live in public/images, which express.static
-// serves before any authentication, so a cached thumbnail could be fetched
-// without the access check. server.js refuses those URLs and clears the old
-// cache on startup.
-const THUMBNAIL_CACHE_DIR = path.join(process.cwd(), 'data', 'thumbnails');
 
 /**
  * The owner of per-user state such as document chats: the CF Access user, or
@@ -724,7 +720,7 @@ router.get('/thumb/:documentId', async (req, res) => {
     return res.status(400).send('Invalid document ID');
   }
   // Outside public/: anything there is served without authentication.
-  const cachePath = path.join(THUMBNAIL_CACHE_DIR, `${documentId}.png`);
+  const cachePath = thumbnailPath(documentId);
 
   try {
     try {

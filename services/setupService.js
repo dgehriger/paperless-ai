@@ -226,10 +226,26 @@ class SetupService {
       const dataDir = path.dirname(this.envPath);
       await fs.mkdir(dataDir, { recursive: true });
 
-      const envContent = Object.entries(config)
+      // Keys the settings form does not manage (authentication mode, the
+      // Cloudflare Access audience, admin addresses, RAG embedding settings,
+      // ...) are kept from the existing file. Rewriting the file from the form
+      // alone dropped them, and after the restart the app fell back to local
+      // authentication with no user or library restrictions.
+      let existing = {};
+      try {
+        existing = require('dotenv').parse(await fs.readFile(this.envPath, 'utf8'));
+      } catch {
+        existing = {};
+      }
+      const merged = { ...existing, ...config };
+
+      const envContent = Object.entries(merged)
         .map(([key, value]) => {
           if (key === "SYSTEM_PROMPT") {
             return `${key}=\`${value}\n\``;
+          }
+          if (typeof value === 'string' && value.includes('\n')) {
+            return `${key}=\`${value}\``;
           }
           return `${key}=${value}`;
         })
@@ -238,7 +254,7 @@ class SetupService {
       await fs.writeFile(this.envPath, envContent);
       
       // Reload environment variables
-      Object.entries(config).forEach(([key, value]) => {
+      Object.entries(merged).forEach(([key, value]) => {
         process.env[key] = value;
       });
     } catch (error) {

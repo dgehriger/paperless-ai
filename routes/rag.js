@@ -100,8 +100,13 @@ router.post('/ask', async (req, res) => {
   try {
     const { question, sessionId } = req.body;
 
-    if (!question) {
-      return res.status(400).json({ error: 'Question is required' });
+    // Checked before any session is created or changed: history stores the
+    // question as text, and a number or object saved there breaks later turns.
+    if (typeof question !== 'string' || !question.trim()) {
+      return res.status(400).json({ error: 'Question must be a non-empty string' });
+    }
+    if (sessionId !== undefined && sessionId !== null && typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId must be a string' });
     }
 
     const userId = getUserId(req);

@@ -145,6 +145,14 @@ router.put('/libraries/:id', (req, res) => {
  * Delete a library
  */
 router.delete('/libraries/:id', (req, res) => {
+  // Removing a user's last library would leave them with none, which means
+  // unrestricted access. Refuse while anyone is assigned; reassign them first.
+  const users = userModel.getLibraryUsers(req.params.id);
+  if (users.length > 0) {
+    return res.status(409).json({
+      error: `This library is assigned to ${users.map(u => u.email).join(', ')}. Reassign them before deleting it.`,
+    });
+  }
   userModel.deleteLibrary(req.params.id);
   res.json({ success: true });
 });
